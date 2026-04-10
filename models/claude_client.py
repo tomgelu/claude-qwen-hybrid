@@ -49,7 +49,6 @@ Style or minor improvements alone should not cause a "fail"."""
 
 
 def _strip_json_fences(raw: str) -> str:
-    """Strip markdown code fences that LLMs often wrap JSON in."""
     match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", raw)
     if match:
         return match.group(1).strip()
@@ -69,12 +68,22 @@ def _call_claude(system_prompt: str, user_message: str, model: str) -> str:
         capture_output=True,
         text=True,
         stdin=subprocess.DEVNULL,
+        timeout=120,  # planning calls can take 30-60s
     )
+
+    output = result.stdout.strip() + "\n" + result.stderr.strip()
+
+    # 🔥 CRITICAL: detect rate limit / quota / CLI block
+    if "You've hit your limit" in output or "rate limit" in output.lower():
+        raise RuntimeError("Claude rate limited")
+
     if result.returncode != 0:
         raise RuntimeError(f"claude CLI error: {result.stderr.strip()}")
 
+    # Try parsing structured output
     try:
         wrapper = json.loads(result.stdout)
+
         usage = wrapper.get("usage", {})
         from utils.token_tracker import tracker
         tracker.add_claude(
@@ -84,23 +93,53 @@ def _call_claude(system_prompt: str, user_message: str, model: str) -> str:
             cache_write=usage.get("cache_creation_input_tokens", 0),
             cost_usd=wrapper.get("total_cost_usd", 0.0),
         )
+
         text_output = wrapper.get("result", "")
+
     except (json.JSONDecodeError, KeyError):
+        # 🔥 fallback: raw output (might still be valid JSON string)
         text_output = result.stdout
 
-    return _strip_json_fences(text_output)
+    cleaned = _strip_json_fences(text_output)
+
+    # 🔥 FINAL SAFETY: ensure it's valid JSON
+    try:
+        json.loads(cleaned)
+    except Exception:
+        raise RuntimeError("Claude returned invalid JSON")
+
+    return cleaned
 
 
 class ClaudeClient:
     def __init__(self):
         self.model = CLAUDE_MODEL
+        self.enabled = True  # 🔥 runtime disable
 
     def get_plan(self, user_input: str, workspace_context: str = "") -> dict:
+        if not self.enabled:
+            raise RuntimeError("Claude disabled")
+
         user_message = f"User goal:\n{user_input}{workspace_context}"
-        raw = _call_claude(PLANNER_SYSTEM_PROMPT, user_message, self.model)
-        return json.loads(raw)
+
+        try:
+            raw = _call_claude(PLANNER_SYSTEM_PROMPT, user_message, self.model)
+            return json.loads(raw)
+
+        except Exception as e:
+            self.enabled = False  # 🔥 disable permanently
+            raise RuntimeError(f"Claude planner failed: {e}")
 
     def review(self, execution_result: dict) -> dict:
+        if not self.enabled:
+            raise RuntimeError("Claude disabled")
+
         user_message = f"Analyze the result of this step:\n{json.dumps(execution_result, indent=2)}"
-        raw = _call_claude(REVIEWER_SYSTEM_PROMPT, user_message, self.model)
-        return json.loads(raw)
+
+        try:
+            raw = _call_claude(REVIEWER_SYSTEM_PROMPT, user_message, self.model)
+            return json.loads(raw)
+
+        except Exception as e:
+            self.enabled = False  # 🔥 disable permanently
+            raise RuntimeError(f"Claude reviewer failed: {e}")

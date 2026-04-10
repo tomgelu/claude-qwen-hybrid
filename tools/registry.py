@@ -10,10 +10,18 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "Read the contents of a file",
+            "description": (
+                "Read a file with line numbers. "
+                "Use start_line/end_line to read only a specific range — "
+                "prefer this for large files when you know roughly where to look."
+            ),
             "parameters": {
                 "type": "object",
-                "properties": {"path": {"type": "string"}},
+                "properties": {
+                    "path": {"type": "string"},
+                    "start_line": {"type": "integer", "description": "First line to read (1-indexed, inclusive)"},
+                    "end_line": {"type": "integer", "description": "Last line to read (1-indexed, inclusive)"},
+                },
                 "required": ["path"],
             },
         },
@@ -68,11 +76,36 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "list_directory",
-            "description": "List files and directories at a path",
+            "description": (
+                "List files and directories as a tree. Use depth=1 for a flat listing, "
+                "depth=2 (default) for a two-level view, depth=3+ for deeper exploration. "
+                "Hidden files are excluded."
+            ),
             "parameters": {
                 "type": "object",
-                "properties": {"path": {"type": "string"}},
+                "properties": {
+                    "path": {"type": "string"},
+                    "depth": {"type": "integer", "description": "How many levels deep to recurse (default 2)"},
+                },
                 "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_tests",
+            "description": (
+                "Run the project's test suite. Auto-detects the test command from project files "
+                "(pytest, npm test, go test, cargo test, make test). "
+                "Pass cmd to override. Returns pass/fail, output, and a one-line summary."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "cmd": {"type": "string", "description": "Override test command (optional)"},
+                    "timeout": {"type": "integer", "description": "Seconds before giving up (default 120)"},
+                },
             },
         },
     },
@@ -93,6 +126,77 @@ TOOLS = [
                 "type": "object",
                 "properties": {"message": {"type": "string"}},
                 "required": ["message"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "git_diff",
+            "description": "Show unstaged and staged changes in the workspace (git diff)",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "replace_lines",
+            "description": (
+                "Replace a range of lines in a file with new content. "
+                "Use after read_file to get exact line numbers. "
+                "Prefer this over write_file for targeted edits to large files."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "start_line": {"type": "integer", "description": "First line to replace (1-indexed, inclusive)"},
+                    "end_line": {"type": "integer", "description": "Last line to replace (1-indexed, inclusive)"},
+                    "new_content": {"type": "string", "description": "Replacement text for the line range"},
+                },
+                "required": ["path", "start_line", "end_line", "new_content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "glob_files",
+            "description": "Find files matching a glob pattern (e.g. '**/*.py', 'src/**/*.ts'). Returns matching paths.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "Glob pattern, e.g. '**/*.py'"},
+                    "path": {"type": "string", "description": "Root directory to search from (default: workspace)"},
+                },
+                "required": ["pattern"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_file",
+            "description": "Delete a file or directory (recursive for directories). Use with caution.",
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "move_file",
+            "description": "Move or rename a file or directory.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "src": {"type": "string"},
+                    "dst": {"type": "string"},
+                },
+                "required": ["src", "dst"],
             },
         },
     },

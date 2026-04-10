@@ -282,8 +282,9 @@ claude-autonaumous/
 │
 ├── tools/
 │   ├── registry.py          TOOLS list + XML tool-call parser (single source of truth)
-│   ├── file_tool.py         read_file, write_file, diff_file, search_files
+│   ├── file_tool.py         read_file, write_file, replace_lines, search_files, glob_files, list_directory, delete_file, move_file
 │   ├── bash_tool.py         run_command (shell, with timeout)
+│   ├── test_tool.py         run_tests (auto-detects pytest/npm/go/cargo/make)
 │   └── git_tool.py          status, commit, diff
 │
 ├── config/
@@ -321,7 +322,23 @@ Orchestrator sends step description
 Orchestrator receives: files written, commands run, summary
 ```
 
-Available tools in every agent call: `read_file` · `write_file` · `run_command` · `list_directory` · `git_status` · `git_commit`
+Available tools in every agent call (13 total):
+
+| Tool | Description |
+|---|---|
+| `read_file(path, start_line?, end_line?)` | Line-numbered file contents; range params avoid reading large files in full |
+| `write_file(path, content)` | Full file overwrite, creates parent dirs |
+| `replace_lines(path, start_line, end_line, new_content)` | Surgical line-range edit — prefer over write_file for targeted changes |
+| `search_files(pattern, path?, glob?)` | Regex grep with file + line results |
+| `glob_files(pattern, path?)` | Find files by pattern e.g. `**/*.py` |
+| `list_directory(path, depth?)` | ASCII tree view, default depth 2 |
+| `delete_file(path)` | Remove file or directory tree |
+| `move_file(src, dst)` | Move or rename |
+| `run_command(cmd, cwd?)` | Shell command with timeout |
+| `run_tests(cmd?, timeout?)` | Auto-detect and run test suite (pytest / npm / go / cargo / make) |
+| `git_status` | Working tree status |
+| `git_commit(message)` | Stage all + commit |
+| `git_diff` | Show unstaged/staged changes |
 
 ---
 

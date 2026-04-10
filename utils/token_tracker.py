@@ -7,6 +7,7 @@ class TokenTracker:
         self._claude_cost_usd = 0.0
         self._qwen_input = 0
         self._qwen_output = 0
+        self.tool_response_bytes = 0  # total bytes of tool results fed back into Qwen context
 
     def add_claude(self, input_tokens: int = 0, output_tokens: int = 0,
                    cache_read: int = 0, cache_write: int = 0, cost_usd: float = 0.0):
@@ -36,6 +37,10 @@ class TokenTracker:
             f"[tokens] Qwen  (local):   {self._qwen_input:>7,} in / {self._qwen_output:>6,} out"
             + f"  |  {qwen_total:,} total"
         )
+        if self.tool_response_bytes:
+            lines.append(
+                f"[tokens] Tool resp bytes: {self.tool_response_bytes:>7,}  (context bloat from cmd outputs)"
+            )
         lines.append("[tokens] ────────────────────────────────────────────")
         return "\n".join(lines)
 

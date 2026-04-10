@@ -20,9 +20,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from config.settings import LOCAL_MODEL_URL, LOCAL_MODEL_NAME, LOCAL_MODEL_TIMEOUT
 from tools.registry import TOOLS, parse_xml_tool_calls, strip_xml_tool_calls
-from tools.file_tool import read_file, write_file, diff_file, search_files
+from tools.file_tool import read_file, write_file, diff_file, search_files, replace_lines, glob_files, delete_file, move_file, list_directory
 from tools.bash_tool import run_command
-from tools.git_tool import status as git_status, commit as git_commit
+from tools.git_tool import status as git_status, commit as git_commit, diff as git_diff
+from tools.test_tool import run_tests
 
 # ── ANSI colours ─────────────────────────────────────────────────────────────
 CYAN   = "\033[96m"
@@ -70,7 +71,7 @@ def dispatch(name: str, args: dict, workspace: str) -> str:
     try:
         if name == "read_file":
             try:
-                return read_file(args["path"])
+                return read_file(args["path"], start_line=args.get("start_line"), end_line=args.get("end_line"))
             except FileNotFoundError:
                 return f"ERROR: file not found: {args['path']}"
 
@@ -110,12 +111,23 @@ def dispatch(name: str, args: dict, workspace: str) -> str:
 
         elif name == "list_directory":
             path = args.get("path", workspace)
-            try:
-                entries = sorted(os.listdir(path))
-                print(f"\n{DIM}  ls {path}: {', '.join(entries[:20])}{RESET}")
-                return json.dumps({"entries": entries})
-            except Exception as e:
-                return json.dumps({"error": str(e)})
+            depth = args.get("depth", 2)
+            result = list_directory(path, depth=depth)
+            if "tree" in result:
+                tree_preview = "\n".join(result["tree"].splitlines()[:20])
+                print(f"\n{DIM}{tree_preview}{RESET}")
+            return json.dumps(result)
+
+        elif name == "run_tests":
+            cmd = args.get("cmd")
+            timeout = args.get("timeout", 120)
+            result = run_tests(workspace, cmd=cmd, timeout=timeout)
+            status_color = GREEN if result.get("success") else RED
+            label = "PASSED" if result.get("success") else "FAILED"
+            print(f"\n{DIM}  tests [{status_color}{label}{RESET}{DIM}]: {result.get('command')}{RESET}")
+            if result.get("summary"):
+                print(f"{DIM}  {result['summary']}{RESET}")
+            return json.dumps(result)
 
         elif name == "git_status":
             out = git_status(cwd=workspace)
@@ -125,6 +137,43 @@ def dispatch(name: str, args: dict, workspace: str) -> str:
         elif name == "git_commit":
             result = git_commit(args["message"], cwd=workspace)
             print(f"\n{DIM}  git commit: {args['message']}{RESET}")
+            return json.dumps(result)
+
+        elif name == "git_diff":
+            out = git_diff(cwd=workspace)
+            print(f"\n{DIM}  git diff: {len(out.splitlines())} line(s){RESET}")
+            return out
+
+        elif name == "replace_lines":
+            result = replace_lines(args["path"], args["start_line"], args["end_line"], args["new_content"])
+            if result.get("success"):
+                print(f"\n{DIM}  ✎ replace_lines {args['path']} [{args['start_line']}-{args['end_line']}]{RESET}")
+                diff = result.get("diff", "")
+                for line in diff.splitlines()[:30]:
+                    if line.startswith("+"):
+                        print(f"{GREEN}{line}{RESET}")
+                    elif line.startswith("-"):
+                        print(f"{RED}{line}{RESET}")
+                    else:
+                        print(f"{DIM}{line}{RESET}")
+            return json.dumps(result)
+
+        elif name == "glob_files":
+            path = args.get("path", workspace)
+            result = glob_files(args["pattern"], path=path)
+            print(f"\n{DIM}  glob '{args['pattern']}': {result['total']} file(s){RESET}")
+            return json.dumps(result)
+
+        elif name == "delete_file":
+            result = delete_file(args["path"])
+            if result.get("success"):
+                print(f"\n{DIM}  rm {args['path']}{RESET}")
+            return json.dumps(result)
+
+        elif name == "move_file":
+            result = move_file(args["src"], args["dst"])
+            if result.get("success"):
+                print(f"\n{DIM}  mv {args['src']} → {args['dst']}{RESET}")
             return json.dumps(result)
 
         else:

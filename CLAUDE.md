@@ -50,8 +50,9 @@ qwen -w ~/other-project "task"    # explicit workspace
 ```
 main.py → Orchestrator → Planner (ClaudeClient via `claude --print` subprocess)
                        → Executor (LocalClient → streaming tool-calling loop → dispatch)
-                             tools: read_file · write_file · search_files · run_command
-                                    list_directory · git_status · git_commit
+                             tools: read_file · write_file · replace_lines · search_files
+                                    glob_files · list_directory · run_command · run_tests
+                                    delete_file · move_file · git_status · git_commit · git_diff
 ```
 
 **Key data flow:**
@@ -83,9 +84,43 @@ Registered globally in `~/.claude/settings.json`. Exposes `qwen_execute` and `qw
 ## Tools available to the agent
 
 Defined in `tools/registry.py`. `Executor._dispatch()` routes calls to:
-- `tools/file_tool.py` — `read_file`, `write_file`, `diff_file`, `search_files` (regex grep across files)
-- `tools/bash_tool.py` — `run_command` (subprocess with timeout, workspace resolved at call time)
-- `tools/git_tool.py` — `git_status`, `git_commit`
+- `tools/file_tool.py` — file I/O and navigation:
+  - `read_file(path, start_line?, end_line?)` — returns line-numbered content; use range params to read only the relevant section of large files
+  - `write_file(path, content)` — full file overwrite, creates parent dirs
+  - `replace_lines(path, start_line, end_line, new_content)` — surgical line-range replacement; prefer over write_file for targeted edits
+  - `search_files(pattern, path?, glob?)` — regex grep with file/line results
+  - `glob_files(pattern, path?)` — find files by glob (e.g. `**/*.py`) without reading content
+  - `list_directory(path, depth?)` — ASCII tree view, default depth 2; use depth=1 for quick peek
+  - `delete_file(path)` — remove file or directory tree
+  - `move_file(src, dst)` — move or rename
+- `tools/bash_tool.py` — `run_command(cmd, cwd?)` (subprocess with timeout, workspace resolved at call time)
+- `tools/test_tool.py` — `run_tests(cmd?, timeout?)` — auto-detects test runner (pytest, npm test, go test, cargo test, make test); returns pass/fail, output, and summary line
+- `tools/git_tool.py` — `git_status`, `git_commit(message)`, `git_diff`
+
+## RTK benchmark (`bench.py`)
+
+Measures Qwen token usage with and without [RTK](https://github.com/user/rtk) filtering on bash command output.
+RTK intercepts commands like `git status`, `pytest`, etc. and strips noise before the output is fed back into Qwen's context window.
+
+```bash
+python3 bench.py                        # default fibonacci task
+python3 bench.py "your custom task"     # custom task
+```
+
+Runs the full Claude→Qwen pipeline twice in isolated temp workspaces (Run A: no RTK, Run B: RTK on), then prints a side-by-side token comparison.
+
+**What the metrics mean:**
+- `Qwen input tokens` — total tokens fed into Qwen across all turns; RTK reduces this by compressing tool response bytes
+- `Tool resp bytes` — raw bytes of bash/tool output injected back into context; the primary lever RTK acts on
+- `Claude input tokens` — only uncached tokens charged; most planning tokens hit the prompt cache (shown separately by the CLI)
+- `Claude output tokens` — varies run-to-run because each run gets an independent planning call
+
+**Observed savings (fibonacci task, ~40 turns total):** RTK saved ~6% Qwen input tokens and reduced tool context by ~5%.
+Results are single-sample; run multiple times and average for reliable numbers.
+
+**Known caveats:**
+- Each run uses an independent Claude planning call, so plan structure (and thus Qwen turn count) can differ between A and B — expect some output-token noise
+- `STREAM_OUTPUT` is read at `config.settings` import time; bench.py forces a full module reload (including `config.*`) to ensure the env var takes effect
 
 ## Testing
 
@@ -107,3 +142,5 @@ bash ~/claude-autonaumous/sglang/check_server.sh
 - **FlashInfer JIT failure:** nvfp4.py patch at `sglang/patches/nvfp4.py` must be mounted in the container (SM12.1 workaround)
 - **Claude planner returns non-JSON:** `_strip_json_fences` handles markdown wrapping; verify CLI with `claude --print --model claude-sonnet-4-6 "test"`
 - **Streaming not working:** Set `STREAM_OUTPUT=false` to disable; check vLLM supports SSE streaming for your model
+- **Executor writes files to wrong directory:** `Executor._dispatch()` resolves all relative paths against `get_workspace()`. If you add new file tools, use the `abs_path()` helper defined at the top of `_dispatch` — otherwise Qwen's relative paths land in the process cwd, commands fail, and the agent loops to max_turns
+- **Claude planner subprocess hangs:** `_call_claude()` in `claude_client.py` has `timeout=120`. A planning call with the full system prompt takes 5-30s normally; if it consistently times out, check `claude --print --output-format json "ping"` to verify the CLI is healthy

@@ -3,6 +3,7 @@ import os
 from models.local_client import LocalClient
 from tools.file_tool import read_file, write_file, diff_file, search_files
 from tools.bash_tool import run_command
+from tools.test_tool import run_tests
 from tools.git_tool import status as git_status, commit as git_commit
 from config.settings import get_workspace
 from utils.logger import get_logger
@@ -53,15 +54,18 @@ class Executor:
     def _dispatch(self, name: str, args: dict):
         workspace = get_workspace()
 
+        def abs_path(p: str) -> str:
+            return p if os.path.isabs(p) else os.path.join(workspace, p)
+
         if name == "read_file":
-            path = args["path"]
+            path = abs_path(args["path"])
             try:
                 return {"content": read_file(path)}
             except FileNotFoundError:
                 return {"error": f"File not found: {path}"}
 
         elif name == "write_file":
-            path, content = args["path"], args["content"]
+            path, content = abs_path(args["path"]), args["content"]
             diff = diff_file(path, content)
             write_file(path, content)
             self._modified_files[path] = content
@@ -94,12 +98,18 @@ class Executor:
             return result
 
         elif name == "list_directory":
-            path = args.get("path", workspace)
+            path = abs_path(args.get("path", workspace))
             try:
                 entries = sorted(os.listdir(path))
                 return {"entries": entries}
             except Exception as e:
                 return {"error": str(e)}
+
+        elif name == "run_tests":
+            result = run_tests(workspace, cmd=args.get("cmd"), timeout=args.get("timeout", 120))
+            status = "PASSED" if result["success"] else "FAILED"
+            log.info(f"  [tool] run_tests [{status}]: {result.get('command', '?')}")
+            return result
 
         elif name == "git_status":
             return {"output": git_status(cwd=workspace)}

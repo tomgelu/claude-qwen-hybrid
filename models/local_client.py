@@ -189,10 +189,12 @@ class LocalClient:
                     fn_args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
                     result = dispatch_fn(fn_name, fn_args)
                     tool_calls_made.append({"name": fn_name, "args": fn_args})
+                    result_str = json.dumps(result) if not isinstance(result, str) else result
+                    _tracker.tool_response_bytes += len(result_str.encode())
                     tool_results.append({
                         "role": "tool",
                         "tool_call_id": tc["id"],
-                        "content": json.dumps(result) if not isinstance(result, str) else result,
+                        "content": result_str,
                     })
                 messages.extend(tool_results)
             else:
@@ -206,6 +208,7 @@ class LocalClient:
                     result = dispatch_fn(fn_name, fn_args)
                     tool_calls_made.append({"name": fn_name, "args": fn_args})
                     result_str = json.dumps(result) if not isinstance(result, str) else result
+                    _tracker.tool_response_bytes += len(result_str.encode())
                     response_parts.append(f"<tool_response>\n{result_str}\n</tool_response>")
                 messages.append({"role": "user", "content": "\n".join(response_parts)})
 
