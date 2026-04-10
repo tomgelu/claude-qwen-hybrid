@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Env files
+.env
+.env.*
+
+# Claude Code session state
+.claude/
+
+# SGLang patches (machine-specific, generated from container)
+sglang/patches/
+
+# Model cache (too large, lives in ~/.cache/huggingface)
+*.safetensors
+*.bin
+*.pt
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
