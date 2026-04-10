@@ -42,3 +42,9 @@ logs/
 # OS
 .DS_Store
 Thumbs.db
+
+# Bench artifacts (files Qwen writes to cwd during benchmark runs)
+test_results.txt
+fib.py
+test_fib.py
+hello.py
