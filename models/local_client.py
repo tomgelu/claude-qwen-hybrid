@@ -1,9 +1,10 @@
 import json
+import re
 import requests
 from config.settings import LOCAL_MODEL_URL, LOCAL_MODEL_NAME, LOCAL_MODEL_TIMEOUT, STREAM_OUTPUT
 from tools.registry import TOOLS, parse_xml_tool_calls, strip_xml_tool_calls
 from utils.logger import get_logger
-from utils.token_tracker import tracker as _tracker
+from utils.token_tracker import get_tracker
 
 log = get_logger(__name__)
 
@@ -103,7 +104,7 @@ class LocalClient:
             # Capture usage from the final chunk (sent when stream_options.include_usage=true)
             if chunk.get("usage"):
                 u = chunk["usage"]
-                _tracker.add_qwen(
+                get_tracker().add_qwen(
                     input_tokens=u.get("prompt_tokens", 0),
                     output_tokens=u.get("completion_tokens", 0),
                 )
@@ -169,7 +170,7 @@ class LocalClient:
         data = resp.json()
         usage = data.get("usage", {})
         if usage:
-            _tracker.add_qwen(
+            get_tracker().add_qwen(
                 input_tokens=usage.get("prompt_tokens", 0),
                 output_tokens=usage.get("completion_tokens", 0),
             )
@@ -200,8 +201,16 @@ class LocalClient:
             }
             content, native_tool_calls, msg = self._call(payload)
 
-            # Try XML fallback if no native tool calls
-            xml_tool_calls = parse_xml_tool_calls(content) if not native_tool_calls else None
+            # Try XML fallback if no native tool calls.
+            # Search full content first, then also try with <think> blocks stripped
+            # (some Qwen3 variants put tool calls outside the thinking block).
+            if not native_tool_calls:
+                xml_tool_calls = parse_xml_tool_calls(content)
+                if not xml_tool_calls:
+                    content_no_think = re.sub(r"<think>.*?</think>", "", content or "", flags=re.DOTALL).strip()
+                    xml_tool_calls = parse_xml_tool_calls(content_no_think) if content_no_think else None
+            else:
+                xml_tool_calls = None
             tool_calls = native_tool_calls or xml_tool_calls
 
             if not tool_calls:
@@ -218,11 +227,15 @@ class LocalClient:
                 for tc in tool_calls:
                     fn_name = tc["function"]["name"]
                     raw_args = tc["function"]["arguments"]
-                    fn_args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                    try:
+                        fn_args = json.loads(raw_args) if isinstance(raw_args, str) and raw_args.strip() else (raw_args if not isinstance(raw_args, str) else {})
+                    except json.JSONDecodeError:
+                        log.warning(f"  [tool] {fn_name}: malformed args JSON, using {{}}")
+                        fn_args = {}
                     result = dispatch_fn(fn_name, fn_args)
                     tool_calls_made.append({"name": fn_name, "args": fn_args})
                     result_str = json.dumps(result) if not isinstance(result, str) else result
-                    _tracker.tool_response_bytes += len(result_str.encode())
+                    get_tracker().add_tool_bytes(fn_name, len(result_str.encode()))
                     tool_results.append({
                         "role": "tool",
                         "tool_call_id": tc["id"],
@@ -236,11 +249,15 @@ class LocalClient:
                 for tc in tool_calls:
                     fn_name = tc["function"]["name"]
                     raw_args = tc["function"]["arguments"]
-                    fn_args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                    try:
+                        fn_args = json.loads(raw_args) if isinstance(raw_args, str) and raw_args.strip() else (raw_args if not isinstance(raw_args, str) else {})
+                    except json.JSONDecodeError:
+                        log.warning(f"  [tool] {fn_name}: malformed args JSON, using {{}}")
+                        fn_args = {}
                     result = dispatch_fn(fn_name, fn_args)
                     tool_calls_made.append({"name": fn_name, "args": fn_args})
                     result_str = json.dumps(result) if not isinstance(result, str) else result
-                    _tracker.tool_response_bytes += len(result_str.encode())
+                    get_tracker().add_tool_bytes(fn_name, len(result_str.encode()))
                     response_parts.append(f"<tool_response>\n{result_str}\n</tool_response>")
                 messages.append({"role": "user", "content": "\n".join(response_parts)})
 
