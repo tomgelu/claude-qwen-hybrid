@@ -375,94 +375,148 @@ RTK_TASK = (
 
 def run_rtk_pair(run_id: str, timestamp: str) -> list[dict]:
     """
-    Run the full Claude→Qwen pipeline twice in isolated workspaces:
-      once with USE_RTK=false, once with USE_RTK=true.
-    Returns two result dicts (no-rtk, rtk) for recording.
+    For each task in PIPELINE_TASKS, run the full Claude->Qwen pipeline twice
+    using the SAME Claude plan: once with USE_RTK=false, once with USE_RTK=true.
+    Returns result dicts for recording.
     """
     import importlib
     import shutil
     import tempfile
+    import threading
 
     results = []
     base = tempfile.mkdtemp(prefix="bench_rtk_")
 
     try:
-        for use_rtk in (False, True):
-            ws = os.path.join(base, "rtk_on" if use_rtk else "rtk_off")
-            os.makedirs(ws)
+        for task_def in PIPELINE_TASKS:
+            task_id   = task_def["id"]
+            task_desc = task_def["description"]
+            setup_fn  = task_def["setup"]
+            timeout   = task_def["timeout"]
 
-            os.environ["USE_RTK"]       = "true" if use_rtk else "false"
-            os.environ["WORKSPACE_DIR"] = ws
-            os.environ["STREAM_OUTPUT"] = "false"
+            print(f"\n  [pipeline] task={task_id}")
 
-            # Fresh tracker + module reload so token counts start at zero
+            # Generate shared plan ONCE before module reloads
             for mod in list(sys.modules.keys()):
                 if mod.startswith(("core.", "models.", "tools.", "utils.", "config.")):
                     del sys.modules[mod]
             importlib.invalidate_caches()
 
-            import utils.token_tracker as tt
-            tt.tracker = tt.TokenTracker()
+            from core.planner import Planner
+            print(f"    planning... ", end="", flush=True)
+            shared_plan = Planner().plan(task_desc)
+            print(f"{len(shared_plan['steps'])} steps", flush=True)
 
-            from core.orchestrator import Orchestrator
-            orch = Orchestrator()
+            for use_rtk in (False, True):
+                label = "rtk_on" if use_rtk else "rtk_off"
+                ws = os.path.join(base, f"{task_id}_{label}")
+                os.makedirs(ws, exist_ok=True)
 
-            label = "rtk_on" if use_rtk else "rtk_off"
-            sys.stdout.write(f"    pipeline ({label:<7}) ... ")
-            sys.stdout.flush()
+                # Run seed setup if needed
+                if setup_fn:
+                    try:
+                        setup_fn(ws)
+                    except Exception as e:
+                        print(f"    setup failed: {e}")
+                        results.append({
+                            "run_id": run_id, "timestamp": timestamp,
+                            "model_type": "pipeline", "model": LOCAL_MODEL_NAME,
+                            "task_id": task_id,
+                            "prompt_id": f"pipeline_{label}_{task_id}",
+                            "prompt_desc": f"RTK pipeline / {task_id}",
+                            "use_rtk": use_rtk,
+                            "error": f"setup failed: {e}",
+                            "latency_s": 0.0,
+                        })
+                        continue
 
-            start = time.perf_counter()
+                os.environ["USE_RTK"]       = "true" if use_rtk else "false"
+                os.environ["WORKSPACE_DIR"] = ws
+                os.environ["STREAM_OUTPUT"] = "false"
 
-            exc = []
-            import threading
-            t = threading.Thread(target=lambda: (
-                exc.append(None) or orch.run(RTK_TASK)
-            ) if True else None, daemon=True)
+                # Fresh modules + fresh tracker
+                for mod in list(sys.modules.keys()):
+                    if mod.startswith(("core.", "models.", "tools.", "utils.", "config.")):
+                        del sys.modules[mod]
+                importlib.invalidate_caches()
 
-            def _run():
-                try:
-                    orch.run(RTK_TASK)
-                except Exception as e:
-                    exc.append(e)
-            t = threading.Thread(target=_run, daemon=True)
-            t.start()
-            t.join(timeout=150)
-            elapsed = time.perf_counter() - start
+                import utils.token_tracker as tt
+                tt.reset_tracker()
 
-            import utils.token_tracker as tt2
-            tr = tt2.tracker
+                from core.orchestrator import Orchestrator
+                from utils.token_tracker import get_tracker
+                orch = Orchestrator()
 
-            if t.is_alive():
-                print(f"timeout after {int(elapsed)}s")
+                sys.stdout.write(f"    {label:<7} ... ")
+                sys.stdout.flush()
+
+                start = time.perf_counter()
+                exc = []
+
+                def _run():
+                    try:
+                        orch.run("", plan=shared_plan)
+                    except Exception as e:
+                        exc.append(e)
+
+                t = threading.Thread(target=_run, daemon=True)
+                t.start()
+                t.join(timeout=timeout)
+                elapsed = time.perf_counter() - start
+
+                tr = get_tracker()
+
+                if t.is_alive():
+                    print(f"timeout after {int(elapsed)}s")
+                    results.append({
+                        "run_id": run_id, "timestamp": timestamp,
+                        "model_type": "pipeline", "model": LOCAL_MODEL_NAME,
+                        "task_id": task_id,
+                        "prompt_id": f"pipeline_{label}_{task_id}",
+                        "prompt_desc": f"RTK pipeline / {task_id}",
+                        "use_rtk": use_rtk,
+                        "error": f"timeout after {int(elapsed)}s",
+                        "latency_s": round(elapsed, 2),
+                    })
+                    continue
+
+                if exc:
+                    print(f"error: {exc[0]}")
+
+                ttft_mean = (sum(tr.ttft_samples) / len(tr.ttft_samples)
+                             if tr.ttft_samples else 0.0)
+                gen_total = sum(tr.generation_samples)
+
+                print(
+                    f"qwen {tr._qwen_input:,}in/{tr._qwen_output:,}out  "
+                    f"tool={tr.tool_response_bytes:,}B  "
+                    f"trim={tr.trim_events}  retry={tr.retry_count}  "
+                    f"{int(elapsed)}s"
+                )
+
                 results.append({
-                    "run_id": run_id, "timestamp": timestamp,
-                    "model_type": "pipeline", "model": LOCAL_MODEL_NAME,
-                    "prompt_id": f"pipeline_{label}", "prompt_desc": "RTK pipeline",
-                    "use_rtk": use_rtk, "error": f"timeout after {int(elapsed)}s",
-                    "latency_s": round(elapsed, 2),
+                    "run_id":        run_id,
+                    "timestamp":     timestamp,
+                    "model_type":    "pipeline",
+                    "model":         LOCAL_MODEL_NAME,
+                    "task_id":       task_id,
+                    "prompt_id":     f"pipeline_{label}_{task_id}",
+                    "prompt_desc":   f"RTK pipeline / {task_id}",
+                    "use_rtk":       use_rtk,
+                    "input_tokens":  tr._qwen_input,
+                    "output_tokens": tr._qwen_output,
+                    "tool_bytes":    tr.tool_response_bytes,
+                    "tool_bytes_by_name": dict(tr.tool_bytes_by_name),
+                    "claude_input_tokens":  tr._claude_input,
+                    "claude_output_tokens": tr._claude_output,
+                    "ttft_mean_s":    round(ttft_mean, 3),
+                    "generation_total_s": round(gen_total, 2),
+                    "trim_events":    tr.trim_events,
+                    "trim_bytes_saved": tr.trim_bytes_saved,
+                    "retry_count":    tr.retry_count,
+                    "reviewer_calls": tr.reviewer_calls,
+                    "latency_s":      round(elapsed, 2),
                 })
-                continue
-
-            qwen_in  = tr._qwen_input
-            qwen_out = tr._qwen_output
-            tool_bytes = tr.tool_response_bytes
-            claude_in  = tr._claude_input
-            claude_out = tr._claude_output
-
-            print(f"qwen {qwen_in:,}in / {qwen_out:,}out  tool_bytes={tool_bytes:,}  {int(elapsed)}s")
-
-            results.append({
-                "run_id": run_id, "timestamp": timestamp,
-                "model_type": "pipeline", "model": LOCAL_MODEL_NAME,
-                "prompt_id": f"pipeline_{label}", "prompt_desc": "RTK pipeline",
-                "use_rtk": use_rtk,
-                "input_tokens":  qwen_in,
-                "output_tokens": qwen_out,
-                "tool_bytes":    tool_bytes,
-                "claude_input_tokens":  claude_in,
-                "claude_output_tokens": claude_out,
-                "latency_s": round(elapsed, 2),
-            })
 
     finally:
         shutil.rmtree(base, ignore_errors=True)
@@ -663,26 +717,26 @@ def write_report() -> None:
             "Full Claude→local pipeline run on the fibonacci task. "
             "RTK filters bash/tool output before it enters the model's context.",
             "",
-            "| Run | Model | RTK | Qwen in | Qwen out | Tool bytes | Claude out | Time |",
-            "|-----|-------|-----|---------|----------|------------|------------|------|",
+            "| Run | Task | Model | RTK | Qwen in | Qwen out | Tool bytes | Time |",
+            "|-----|------|-------|-----|---------|----------|------------|------|",
         ]
         for e in pipeline_entries:
             rtk = "✓" if e.get("use_rtk") else "✗"
             lines.append(
-                f"| {e['run_id']} | `{e['model']}` | {rtk} "
+                f"| {e['run_id']} | {e.get('task_id', '—')} | `{e['model']}` | {rtk} "
                 f"| {e['input_tokens']:,} | {e['output_tokens']:,} "
                 f"| {e.get('tool_bytes', 0):,} "
-                f"| {e.get('claude_output_tokens', 0):,} "
                 f"| {int(e['latency_s'])}s |"
             )
 
-        # Pair up runs and show savings
-        pairs: dict[str, dict] = {}
+        # Pair up runs by (run_id, task_id) and show savings per task
+        pairs: dict[tuple, dict] = {}
         for e in pipeline_entries:
-            pairs.setdefault(e["run_id"], {})[e.get("use_rtk")] = e
+            key = (e["run_id"], e.get("task_id", "unknown"))
+            pairs.setdefault(key, {})[e.get("use_rtk")] = e
 
         savings_rows = []
-        for run_id, pair in pairs.items():
+        for (rid, tid), pair in pairs.items():
             if False in pair and True in pair:
                 off, on = pair[False], pair[True]
                 in_saved  = off["input_tokens"] - on["input_tokens"]
@@ -690,7 +744,7 @@ def write_report() -> None:
                 tb_saved  = off.get("tool_bytes", 0) - on.get("tool_bytes", 0)
                 tb_pct    = tb_saved / off["tool_bytes"] * 100 if off.get("tool_bytes") else 0
                 savings_rows.append(
-                    f"| {run_id} | `{off['model']}` "
+                    f"| {rid} | {tid} | `{off['model']}` "
                     f"| {in_saved:+,} ({in_pct:+.1f}%) "
                     f"| {tb_saved:+,} ({tb_pct:+.1f}%) |"
                 )
@@ -698,10 +752,10 @@ def write_report() -> None:
         if savings_rows:
             lines += [
                 "",
-                "**RTK savings (no-RTK minus RTK):**",
+                "**RTK savings per task (no-RTK minus RTK):**",
                 "",
-                "| Run | Model | Qwen input Δ | Tool bytes Δ |",
-                "|-----|-------|--------------|--------------|",
+                "| Run | Task | Model | Qwen input Δ | Tool bytes Δ |",
+                "|-----|------|-------|--------------|--------------|",
                 *savings_rows,
             ]
 
