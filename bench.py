@@ -18,6 +18,8 @@ Usage:
 
 import argparse
 import os
+import re
+import subprocess
 import sys
 import shutil
 import tempfile
@@ -31,6 +33,48 @@ DEFAULT_TASK = (
     "Add tests in test_csv_stats.py for normal data, empty column, all-null column, "
     "and single-row CSV. Run the tests."
 )
+
+
+def capture_quality(workspace: str, state: dict) -> dict:
+    """
+    Extract quality metrics from a completed pipeline run.
+
+    - Step counts come from the orchestrator state dict.
+    - Test results come from running pytest in the workspace.
+    """
+    completed = state.get("completed_steps", [])
+    failed    = state.get("failed_steps", [])
+    skipped   = state.get("skipped_steps", [])
+
+    tests_passed = 0
+    tests_failed = 0
+
+    # Run pytest in workspace if any test files exist
+    test_files = [
+        f for f in (os.listdir(workspace) if os.path.isdir(workspace) else [])
+        if f.startswith("test_") and f.endswith(".py")
+    ]
+    if test_files:
+        proc = subprocess.run(
+            [sys.executable, "-m", "pytest", "--tb=no", "-q", workspace],
+            capture_output=True, text=True,
+        )
+        output = proc.stdout + proc.stderr
+        # Parse "X passed" / "X failed" from pytest summary line
+        m_passed = re.search(r"(\d+) passed", output)
+        m_failed = re.search(r"(\d+) failed", output)
+        if m_passed:
+            tests_passed = int(m_passed.group(1))
+        if m_failed:
+            tests_failed = int(m_failed.group(1))
+
+    return {
+        "steps_completed": len(completed),
+        "steps_failed":    len(failed),
+        "steps_total":     len(completed) + len(failed) + len(skipped),
+        "tests_passed":    tests_passed,
+        "tests_failed":    tests_failed,
+    }
 
 
 def _fresh_modules():
@@ -60,12 +104,14 @@ def run_once(label: str, use_rtk: bool, workspace: str, plan: dict) -> dict:
     print(f"  RUN {label}  |  USE_RTK={use_rtk}  |  workspace={workspace}")
     print(f"{'='*60}", flush=True)
 
-    RUN_TIMEOUT = 240
+    RUN_TIMEOUT = 480
     exc_holder = []
+    state_holder = []
 
     def _run():
         try:
-            orch.run("", plan=plan)
+            state = orch.run("", plan=plan)
+            state_holder.append(state)
         except Exception as e:
             exc_holder.append(e)
 
@@ -78,6 +124,9 @@ def run_once(label: str, use_rtk: bool, workspace: str, plan: dict) -> dict:
     if exc_holder:
         print(f"\n  [bench] RUN {label} error: {exc_holder[0]}", flush=True)
 
+    state = state_holder[0] if state_holder else {"completed_steps": [], "failed_steps": [], "skipped_steps": []}
+    quality = capture_quality(workspace, state)
+
     tr = get_tracker()
     return {
         "label": label,
@@ -87,6 +136,7 @@ def run_once(label: str, use_rtk: bool, workspace: str, plan: dict) -> dict:
         "tool_bytes": tr.tool_response_bytes,
         "claude_in":  tr._claude_input,
         "claude_out": tr._claude_output,
+        **quality,
     }
 
 
@@ -94,7 +144,9 @@ def _average_stats(stats_list: list[dict]) -> dict:
     """Average numeric fields across multiple runs."""
     if not stats_list:
         return {}
-    keys = ["qwen_in", "qwen_out", "tool_bytes", "claude_in", "claude_out"]
+    keys = ["qwen_in", "qwen_out", "tool_bytes", "claude_in", "claude_out",
+            "steps_completed", "steps_failed", "steps_total",
+            "tests_passed", "tests_failed"]
     avg = {**stats_list[0]}
     for key in keys:
         avg[key] = int(sum(s[key] for s in stats_list) / len(stats_list))
@@ -170,6 +222,11 @@ def main():
     row("Tool resp bytes",      avg_a["tool_bytes"], avg_b["tool_bytes"])
     row("Claude input tokens",  avg_a["claude_in"],  avg_b["claude_in"])
     row("Claude output tokens", avg_a["claude_out"], avg_b["claude_out"])
+    print("╠════════════════════════╬═══════════════╬════════════════╣")
+    row("Steps completed",      avg_a["steps_completed"], avg_b["steps_completed"])
+    row("Steps failed",         avg_a["steps_failed"],    avg_b["steps_failed"])
+    row("Tests passed",         avg_a["tests_passed"],    avg_b["tests_passed"])
+    row("Tests failed",         avg_a["tests_failed"],    avg_b["tests_failed"])
 
     print("╚════════════════════════╩═══════════════╩════════════════╝")
 
