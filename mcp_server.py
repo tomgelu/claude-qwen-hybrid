@@ -29,6 +29,15 @@ def qwen_execute(task: str, workspace: str = "") -> str:
         task: Natural language description of what to build or fix.
         workspace: Absolute path to the project directory (defaults to cwd).
     """
+    try:
+        import requests as _r
+        _r.get(LOCAL_MODEL_URL.replace("/chat/completions", "/models"), timeout=3)
+    except Exception:
+        return (
+            f"Local model server not reachable at {LOCAL_MODEL_URL}. "
+            "Start it with: bash server/ollama.sh  (or docker compose up -d for vLLM)"
+        )
+
     from core.executor import Executor
 
     ws = os.path.abspath(workspace) if workspace else os.getcwd()
@@ -74,8 +83,16 @@ def qwen_chat(message: str) -> str:
         "temperature": 0.6,
         "max_tokens": 2048,
     }
-    response = requests.post(LOCAL_MODEL_URL, json=payload, timeout=LOCAL_MODEL_TIMEOUT)
-    response.raise_for_status()
+    try:
+        response = requests.post(LOCAL_MODEL_URL, json=payload, timeout=LOCAL_MODEL_TIMEOUT)
+        response.raise_for_status()
+    except requests.exceptions.ConnectionError:
+        return (
+            f"Local model server not reachable at {LOCAL_MODEL_URL}. "
+            "Start it with: bash server/ollama.sh  (or docker compose up -d for vLLM)"
+        )
+    except requests.exceptions.HTTPError as e:
+        return f"Local model returned an error: {e} — {response.text[:300]}"
     return response.json()["choices"][0]["message"]["content"]
 
 

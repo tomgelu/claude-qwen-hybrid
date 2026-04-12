@@ -1,5 +1,6 @@
 # Python
 __pycache__/
+*/__pycache__/
 *.py[cod]
 *.pyo
 *.pyd
@@ -48,3 +49,10 @@ test_results.txt
 fib.py
 test_fib.py
 hello.py
+
+# Benchmark results + generated report (machine-local)
+benchmark_results.jsonl
+BENCHMARK_REPORT.md
+
+# Runtime plan state (written to workspace by orchestrator, cleaned up on success)
+.autogen_plan.json

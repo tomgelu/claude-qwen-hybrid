@@ -1,0 +1,52 @@
+services:
+  vllm:
+    image: vllm/vllm-openai:latest
+    runtime: nvidia
+    environment:
+      # Set these in .env or override here
+      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
+    command: >
+      --model ${VLLM_MODEL:-Qwen/Qwen2.5-Coder-7B-Instruct}
+      --port 8000
+      --host 0.0.0.0
+      --gpu-memory-utilization ${GPU_MEMORY_UTIL:-0.90}
+      --max-model-len ${MAX_MODEL_LEN:-32768}
+      ${VLLM_EXTRA_ARGS:---trust-remote-code --enforce-eager --enable-auto-tool-choice --tool-call-parser hermes}
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - huggingface_cache:/root/.cache/huggingface
+    ipc: host
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  bench-viewer:
+    image: python:3.12-slim
+    command: python3 /app/bench_viewer.py ${BENCH_PORT:-8787}
+    profiles: [bench]
+    environment:
+      - DOCKER=1
+    ports:
+      - "127.0.0.1:${BENCH_PORT:-8787}:${BENCH_PORT:-8787}"
+    volumes:
+      - .:/app:ro
+    working_dir: /app
+    restart: unless-stopped
+
+volumes:
+  huggingface_cache:

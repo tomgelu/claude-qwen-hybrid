@@ -7,6 +7,37 @@ from utils.token_tracker import tracker as _tracker
 
 log = get_logger(__name__)
 
+_TRIM_KEEP_TURNS = 8   # keep last N tool exchanges in full; compress older ones
+_TRIM_MAX_BYTES  = 300  # bytes to keep per compressed tool response
+
+
+def _trim_messages(messages: list[dict]) -> list[dict]:
+    """Compress old tool responses to reduce context bloat on long tasks.
+
+    Keeps the system prompt and user task intact. Truncates content of tool
+    result messages older than the last _TRIM_KEEP_TURNS exchanges so the
+    model still sees they were called but doesn't pay tokens for full output.
+    """
+    # Locate tool result messages (role="tool" or user XML fallback)
+    tool_indices = [
+        i for i, m in enumerate(messages)
+        if m.get("role") == "tool"
+        or (m.get("role") == "user" and "<tool_response>" in (m.get("content") or ""))
+    ]
+    if len(tool_indices) <= _TRIM_KEEP_TURNS:
+        return messages
+
+    cutoff = tool_indices[-_TRIM_KEEP_TURNS]  # compress everything before this index
+    trimmed = []
+    for i, m in enumerate(messages):
+        if i < cutoff and m.get("role") == "tool":
+            content = m.get("content", "")
+            if len(content) > _TRIM_MAX_BYTES:
+                m = {**m, "content": content[:_TRIM_MAX_BYTES] + " …[trimmed]"}
+        trimmed.append(m)
+    return trimmed
+
+
 AGENT_SYSTEM_PROMPT = """You are an autonomous coding agent executing a specific step in a software task.
 
 You have tools to read/write files, run commands, and interact with git.
@@ -159,6 +190,7 @@ class LocalClient:
         tool_calls_made = []
 
         for turn in range(max_turns):
+            messages = _trim_messages(messages)
             payload = {
                 "model": self.model,
                 "messages": messages,

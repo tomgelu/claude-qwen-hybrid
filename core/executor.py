@@ -1,10 +1,13 @@
 import json
 import os
 from models.local_client import LocalClient
-from tools.file_tool import read_file, write_file, diff_file, search_files
+from tools.file_tool import (
+    read_file, write_file, diff_file, search_files,
+    replace_lines, glob_files, delete_file, move_file, list_directory,
+)
 from tools.bash_tool import run_command
 from tools.test_tool import run_tests
-from tools.git_tool import status as git_status, commit as git_commit
+from tools.git_tool import status as git_status, commit as git_commit, diff as git_diff
 from config.settings import get_workspace
 from utils.logger import get_logger
 
@@ -60,7 +63,7 @@ class Executor:
         if name == "read_file":
             path = abs_path(args["path"])
             try:
-                return {"content": read_file(path)}
+                return {"content": read_file(path, args.get("start_line"), args.get("end_line"))}
             except FileNotFoundError:
                 return {"error": f"File not found: {path}"}
 
@@ -99,11 +102,7 @@ class Executor:
 
         elif name == "list_directory":
             path = abs_path(args.get("path", workspace))
-            try:
-                entries = sorted(os.listdir(path))
-                return {"entries": entries}
-            except Exception as e:
-                return {"error": str(e)}
+            return list_directory(path, depth=int(args.get("depth", 2)))
 
         elif name == "run_tests":
             result = run_tests(workspace, cmd=args.get("cmd"), timeout=args.get("timeout", 120))
@@ -116,6 +115,36 @@ class Executor:
 
         elif name == "git_commit":
             return git_commit(args["message"], cwd=workspace)
+
+        elif name == "git_diff":
+            return {"output": git_diff(cwd=workspace)}
+
+        elif name == "replace_lines":
+            path = abs_path(args["path"])
+            result = replace_lines(path, int(args["start_line"]), int(args["end_line"]), args["new_content"])
+            if result.get("success"):
+                self._modified_files[path] = ""
+                log.info(f"  [tool] replace_lines → {path} lines {args['start_line']}-{args['end_line']}")
+            return result
+
+        elif name == "glob_files":
+            path = abs_path(args.get("path", workspace))
+            result = glob_files(args["pattern"], path=path)
+            log.info(f"  [tool] glob_files '{args['pattern']}' → {result['total']} file(s)")
+            return result
+
+        elif name == "delete_file":
+            path = abs_path(args["path"])
+            result = delete_file(path)
+            log.info(f"  [tool] delete_file → {path}")
+            return result
+
+        elif name == "move_file":
+            src = abs_path(args["src"])
+            dst = abs_path(args["dst"])
+            result = move_file(src, dst)
+            log.info(f"  [tool] move_file {src} → {dst}")
+            return result
 
         else:
             return {"error": f"Unknown tool: {name}"}

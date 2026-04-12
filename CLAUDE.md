@@ -4,24 +4,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-A hybrid agentic coding system where **Claude Code acts as the Planner** (generates a structured JSON plan) and a **local Qwen model acts as the Executor** (runs tools autonomously to implement each step). The local model runs via SGLang/vLLM on a DGX Spark (GB10, SM12.1) at `http://127.0.0.1:8000`.
+A hybrid agentic coding system where **Claude Code acts as the Planner** (generates a structured JSON plan) and a **local model acts as the Executor** (runs tools autonomously to implement each step). Works with any OpenAI-compatible local model server (Ollama, vLLM, LM Studio, llama.cpp, SGLang).
 
 ## Running the system
 
 **Start the local model server (required first):**
 ```bash
-bash ~/claude-autonaumous/sglang/serve_sglang.sh
-curl http://127.0.0.1:8000/health   # wait for 200 OK
+bash server/ollama.sh               # Ollama (easiest)
+docker compose up -d                # vLLM via Docker
+bash sglang/serve_sglang.sh         # SGLang on DGX Spark (80 GB+)
+bash server/check.sh                # verify any backend
 ```
 
-**Hybrid pipeline (Claude plans, Qwen executes):**
+**Hybrid pipeline (Claude plans, local model executes):**
 ```bash
 cd ~/my-project
 python3 ~/claude-autonaumous/main.py "your goal here"
 python3 ~/claude-autonaumous/main.py   # interactive mode
 ```
 
-**Qwen standalone REPL (no Claude tokens):**
+**Local model standalone REPL (no Claude tokens):**
 ```bash
 qwen                              # interactive, uses cwd
 qwen "implement feature X"        # single task
@@ -38,8 +40,8 @@ qwen -w ~/other-project "task"    # explicit workspace
 |---|---|---|
 | `WORKSPACE_DIR` | `cwd` | Project directory for tool operations (resolved at call time) |
 | `CLAUDE_MODEL` | `claude-sonnet-4-6` | Claude model for planning |
-| `LOCAL_MODEL_NAME` | `qwen3-next-80b` | Model name sent to vLLM |
-| `LOCAL_MODEL_URL` | `http://127.0.0.1:8000/v1/chat/completions` | Local model endpoint |
+| `LOCAL_MODEL_NAME` | `qwen3-next-80b` | Model name sent to the server (run `curl .../v1/models` to find yours) |
+| `LOCAL_MODEL_URL` | `http://127.0.0.1:8000/v1/chat/completions` | OpenAI-compatible endpoint |
 | `LOCAL_MODEL_TIMEOUT` | `120` | Seconds per request |
 | `STREAM_OUTPUT` | `true` | Stream tokens from local model as they arrive (set false to disable) |
 | `ENABLE_REVIEWER` | `false` | Claude reviews each step; retries on "fail" verdict |

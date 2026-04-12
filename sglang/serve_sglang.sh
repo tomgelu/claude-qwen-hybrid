@@ -21,7 +21,7 @@ docker run --rm \
   -v "$HOME/.cache/vllm:/root/.cache/vllm" \
   -v "$HOME/.cache/triton:/root/.cache/triton" \
   -v "$HOME/sglang/patches/nvfp4.py:/app/vllm/vllm/model_executor/layers/fused_moe/oracle/nvfp4.py:ro" \
-  -e MODEL="/root/.cache/huggingface/hub/models--nvidia--Qwen3-Next-80B-A3B-Instruct-NVFP4/snapshots/8fb2682f136cf94d932a498f18cb1e428832a912" \
+  -e MODEL="${SGLANG_MODEL:-nvidia/Qwen3-Next-80B-A3B-Instruct-NVFP4}" \
   -e PORT=8000 \
   -e HOST=0.0.0.0 \
   -e GPU_MEMORY_UTIL=0.88 \

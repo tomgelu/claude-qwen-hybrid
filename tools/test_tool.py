@@ -4,6 +4,7 @@ Supports: pytest, unittest, npm/yarn/pnpm, go test, cargo, make test.
 """
 import os
 import subprocess
+from tools.bash_tool import _maybe_rtk
 
 
 def _detect_command(workspace: str) -> str | None:
@@ -50,6 +51,8 @@ def run_tests(workspace: str, cmd: str | None = None, timeout: int = 120) -> dic
             "command": None,
             "error": "Could not detect a test command. Pass cmd= explicitly or add a test runner.",
         }
+
+    detected = _maybe_rtk(detected)
 
     try:
         result = subprocess.run(
