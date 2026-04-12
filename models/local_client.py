@@ -1,6 +1,7 @@
 import json
 import re
 import requests
+import time
 from config.settings import LOCAL_MODEL_URL, LOCAL_MODEL_NAME, LOCAL_MODEL_TIMEOUT, STREAM_OUTPUT
 from tools.registry import TOOLS, parse_xml_tool_calls, strip_xml_tool_calls
 from utils.logger import get_logger
@@ -82,10 +83,12 @@ class LocalClient:
         payload = {**payload, "stream": True, "stream_options": {"include_usage": True}}
         resp = requests.post(self.url, json=payload, timeout=self.timeout, stream=True)
         resp.raise_for_status()
+        _t_start = time.perf_counter()
 
         content_parts: list[str] = []
         tool_calls_acc: dict[int, dict] = {}
         printed_any = False
+        _ttft_s: float | None = None
 
         for raw_line in resp.iter_lines():
             if not raw_line:
@@ -115,6 +118,8 @@ class LocalClient:
             delta = choices[0].get("delta", {})
 
             if delta.get("content"):
+                if _ttft_s is None:
+                    _ttft_s = time.perf_counter() - _t_start
                 tok = delta["content"]
                 content_parts.append(tok)
                 print(tok, end="", flush=True)
@@ -134,6 +139,10 @@ class LocalClient:
 
         if printed_any:
             print()
+
+        _generation_s = time.perf_counter() - _t_start
+        if _ttft_s is not None:
+            get_tracker().add_ttft(_ttft_s, _generation_s)
 
         full_content = "".join(content_parts)
 
