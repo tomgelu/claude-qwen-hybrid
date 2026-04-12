@@ -69,6 +69,237 @@ PROMPTS = [
 ]
 
 
+# ── Pipeline task suite ───────────────────────────────────────────────────────
+# Tasks are deliberately non-trivial so the agent must reason, read, and
+# navigate the workspace rather than recall a memorized answer.
+
+def _setup_multifile_refactor(workspace: str) -> None:
+    from pathlib import Path
+    ws = Path(workspace)
+
+    (ws / "store.py").write_text(
+        '# store.py — monolithic inventory manager\n'
+        'import json\nimport os\nimport sys\n'
+        'from dataclasses import dataclass, asdict\nfrom typing import Optional\n\n'
+        '@dataclass\nclass Item:\n'
+        '    id: int\n    name: str\n    quantity: int\n    price: float\n'
+        '    category: Optional[str] = None\n\n'
+        '@dataclass\nclass Store:\n'
+        '    name: str\n    items: list\n\n'
+        '    def add_item(self, item): self.items.append(item)\n\n'
+        '    def remove_item(self, item_id):\n'
+        '        self.items = [i for i in self.items if i.id != item_id]\n\n'
+        '    def find_item(self, item_id):\n'
+        '        return next((i for i in self.items if i.id == item_id), None)\n\n'
+        '    def total_value(self):\n'
+        '        return sum(i.quantity * i.price for i in self.items)\n\n'
+        '    def items_by_category(self, category):\n'
+        '        return [i for i in self.items if i.category == category]\n\n'
+        'STORE_FILE = "store_data.json"\n\n'
+        'def save_store(store, path=STORE_FILE):\n'
+        '    data = {"name": store.name, "items": [asdict(i) for i in store.items]}\n'
+        '    with open(path, "w") as f: json.dump(data, f, indent=2)\n\n'
+        'def load_store(path=STORE_FILE):\n'
+        '    if not os.path.exists(path): return Store(name="My Store", items=[])\n'
+        '    with open(path) as f: data = json.load(f)\n'
+        '    return Store(name=data["name"], items=[Item(**i) for i in data["items"]])\n\n'
+        'def cmd_add(args):\n'
+        '    store = load_store()\n'
+        '    item = Item(id=len(store.items)+1, name=args[0], quantity=int(args[1]),\n'
+        '                price=float(args[2]), category=args[3] if len(args)>3 else None)\n'
+        '    store.add_item(item)\n    save_store(store)\n'
+        '    print(f"Added: {item.name} x{item.quantity} @ ${item.price:.2f}")\n\n'
+        'def cmd_remove(args):\n'
+        '    store = load_store()\n    store.remove_item(int(args[0]))\n'
+        '    save_store(store)\n    print(f"Removed item {args[0]}")\n\n'
+        'def cmd_list(args):\n'
+        '    store = load_store()\n'
+        '    if not store.items: print("No items."); return\n'
+        '    for i in store.items:\n'
+        '        cat = f" [{i.category}]" if i.category else ""\n'
+        '        print(f"  {i.id:3d}  {i.name:<20} x{i.quantity:4d}  ${i.price:8.2f}{cat}")\n'
+        '    print(f"  Total value: ${store.total_value():.2f}")\n\n'
+        'def cmd_show(args):\n'
+        '    store = load_store()\n    item = store.find_item(int(args[0]))\n'
+        '    if item: print(f"Item {item.id}: {item.name}, qty={item.quantity}")\n'
+        '    else: print(f"Item {args[0]} not found")\n\n'
+        'COMMANDS = {"add": cmd_add, "remove": cmd_remove, "list": cmd_list, "show": cmd_show}\n\n'
+        'def main():\n'
+        '    if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:\n'
+        '        print(f"Usage: python store.py <{\'|\'.join(COMMANDS)}> [args...]")\n'
+        '        sys.exit(1)\n'
+        '    COMMANDS[sys.argv[1]](sys.argv[2:])\n\n'
+        'if __name__ == "__main__":\n    main()\n'
+    )
+
+    (ws / "test_store.py").write_text(
+        'import pytest\nfrom store import Item, Store, save_store, load_store\n'
+        'import os, tempfile\n\n'
+        'def test_add(): s=Store("t",[]); s.add_item(Item(1,"A",1,1.0)); assert len(s.items)==1\n'
+        'def test_remove(): s=Store("t",[Item(1,"A",1,1.0)]); s.remove_item(1); assert s.items==[]\n'
+        'def test_total(): s=Store("t",[Item(1,"A",2,3.0),Item(2,"B",1,5.0)]); assert s.total_value()==11.0\n'
+        'def test_category():\n'
+        '    s=Store("t",[Item(1,"A",1,1.0,category="fruit"),Item(2,"B",1,1.0,category="veg")])\n'
+        '    assert len(s.items_by_category("fruit"))==1\n'
+        'def test_roundtrip():\n'
+        '    with tempfile.NamedTemporaryFile(suffix=".json",delete=False) as f: path=f.name\n'
+        '    try:\n'
+        '        s=Store("Shop",[Item(1,"W",10,2.99)])\n'
+        '        save_store(s,path); loaded=load_store(path)\n'
+        '        assert loaded.name=="Shop" and loaded.items[0].name=="W"\n'
+        '    finally: os.unlink(path)\n'
+    )
+
+
+def _setup_bug_hunt(workspace: str) -> None:
+    from pathlib import Path
+    ws = Path(workspace)
+
+    (ws / "server.py").write_text(
+        '# server.py — simple in-memory task API with 3 injected bugs\n'
+        'import json\n\n'
+        '_tasks: list[dict] = []\n_next_id = 1\n\n\n'
+        'def get_tasks(page: int = 1, per_page: int = 10) -> list[dict]:\n'
+        '    """Return a page of tasks (1-indexed)."""\n'
+        '    start = (page - 1) * per_page\n'
+        '    end = start + per_page + 1  # BUG 1: off-by-one, should be start + per_page\n'
+        '    return _tasks[start:end]\n\n\n'
+        'def get_task(task_id: int) -> dict | None:\n'
+        '    return next((t for t in _tasks if t["id"] == task_id), None)\n\n\n'
+        'def create_task(title: str, done: bool = False) -> dict:\n'
+        '    global _next_id\n'
+        '    # BUG 2: no input sanitization — title accepted without stripping whitespace\n'
+        '    task = {"id": _next_id, "title": title, "done": done}\n'
+        '    _tasks.append(task)\n    _next_id += 1\n    return task\n\n\n'
+        'def update_task(task_id: int, **kwargs) -> dict | None:\n'
+        '    task = get_task(task_id)\n'
+        '    if task is None: return None\n'
+        '    task.update(kwargs)\n    return task\n\n\n'
+        'def delete_task(task_id: int) -> bool:\n'
+        '    global _tasks\n    before = len(_tasks)\n'
+        '    _tasks = [t for t in _tasks if t["id"] != task_id]\n'
+        '    return len(_tasks) < before\n\n\n'
+        'def not_found_status() -> int:\n'
+        '    return 200  # BUG 3: should return 404\n'
+    )
+
+
+def _setup_git_audit(workspace: str) -> None:
+    """Create a small git repo with 5 commits, the last introducing a broken import."""
+    import subprocess
+    from pathlib import Path
+    ws = Path(workspace)
+
+    def git(*args):
+        subprocess.run(["git"] + list(args), cwd=workspace,
+                       check=True, capture_output=True)
+
+    git("init")
+    git("config", "user.email", "bench@test.local")
+    git("config", "user.name", "Bench")
+
+    # Commit 1: initial utils
+    (ws / "utils.py").write_text(
+        'def format_timestamp(ts: float) -> str:\n'
+        '    from datetime import datetime\n'
+        '    return datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")\n\n'
+        'def clamp(value, lo, hi):\n'
+        '    return max(lo, min(hi, value))\n'
+    )
+    git("add", "utils.py")
+    git("commit", "-m", "feat: add utils module")
+
+    # Commit 2: add config
+    (ws / "config.py").write_text(
+        'MAX_RETRIES = 3\nDEFAULT_TIMEOUT = 30\nDEBUG = False\n'
+    )
+    git("add", "config.py")
+    git("commit", "-m", "feat: add config defaults")
+
+    # Commit 3: add app skeleton
+    (ws / "app.py").write_text(
+        'from utils import format_timestamp, clamp\nfrom config import MAX_RETRIES\n\n'
+        'def run(value: float) -> str:\n'
+        '    v = clamp(value, 0, 100)\n'
+        '    return f"[{format_timestamp(0)}] processed {v}"\n'
+    )
+    git("add", "app.py")
+    git("commit", "-m", "feat: initial app.py")
+
+    # Commit 4: fix clamp edge case
+    (ws / "utils.py").write_text(
+        'def format_timestamp(ts: float) -> str:\n'
+        '    from datetime import datetime\n'
+        '    return datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")\n\n'
+        'def clamp(value, lo, hi):\n'
+        '    if lo > hi: raise ValueError(f"lo={lo} > hi={hi}")\n'
+        '    return max(lo, min(hi, value))\n'
+    )
+    git("add", "utils.py")
+    git("commit", "-m", "fix: clamp raises on invalid range")
+
+    # Commit 5: refactor app — introduce broken import (format_date doesn't exist)
+    (ws / "app.py").write_text(
+        'from utils import format_date, clamp  # BUG: format_date should be format_timestamp\n'
+        'from config import MAX_RETRIES\n\n'
+        'def run(value: float) -> str:\n'
+        '    v = clamp(value, 0, 100)\n'
+        '    return f"[{format_date(0)}] processed {v}"\n'
+    )
+    git("add", "app.py")
+    git("commit", "-m", "chore: rename timestamp helper (incomplete)")
+
+
+PIPELINE_TASKS = [
+    {
+        "id": "csv_pipeline",
+        "description": (
+            "Build a Python CLI tool in csv_stats.py that reads a CSV file and computes "
+            "per-column statistics (count, mean, median, stddev, null count), writing a "
+            "Markdown summary report. Accept --input and --output flags. "
+            "Add tests in test_csv_stats.py covering: normal data, empty column, "
+            "all-null column, single-row CSV. Run the tests."
+        ),
+        "setup": None,
+        "timeout": 240,
+    },
+    {
+        "id": "multifile_refactor",
+        "description": (
+            "store.py is a monolithic inventory manager. Refactor it by splitting into "
+            "three modules: models.py (Item and Store dataclasses), storage.py (save_store "
+            "and load_store), and cli.py (cmd_* functions and main). Update all imports. "
+            "All existing tests in test_store.py must still pass after the split."
+        ),
+        "setup": _setup_multifile_refactor,
+        "timeout": 240,
+    },
+    {
+        "id": "bug_hunt",
+        "description": (
+            "server.py has three bugs: an off-by-one in get_tasks() pagination, missing "
+            "input sanitization in create_task() (title should be stripped), and "
+            "not_found_status() returning 200 instead of 404. Find and fix all three, "
+            "then add a targeted test for each fix in test_server.py. Run the tests."
+        ),
+        "setup": _setup_bug_hunt,
+        "timeout": 240,
+    },
+    {
+        "id": "git_audit",
+        "description": (
+            "This git repo has 5 commits. Examine the last 3 commits and write a "
+            "CHANGELOG.md entry grouping the changes by type (feat/fix/chore). "
+            "Then fix the broken import introduced in the most recent commit in app.py "
+            "(it imports format_date which does not exist — check utils.py to find the "
+            "correct name), and commit the fix."
+        ),
+        "setup": _setup_git_audit,
+        "timeout": 240,
+    },
+]
+
+
 # ── Model runners ─────────────────────────────────────────────────────────────
 
 def run_claude(prompt: str, model: str) -> dict:
