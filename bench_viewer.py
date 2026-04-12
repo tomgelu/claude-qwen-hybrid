@@ -83,6 +83,31 @@ HTML = r"""<!DOCTYPE html>
     </div>
     <div id="rtk-savings" style="margin-top:1rem"></div>
   </section>
+  <section id="bench-section">
+    <h2>Bench Runs (A/B/C Quality)</h2>
+    <div class="cards" id="bench-cards"></div>
+    <div class="charts" id="bench-charts"></div>
+    <div style="margin-top:1.2rem">
+      <table id="bench-table">
+        <thead><tr>
+          <th>Metric</th>
+          <th id="bench-col-a">A</th>
+          <th id="bench-col-b">B</th>
+          <th id="bench-col-c" style="display:none">C</th>
+        </tr></thead>
+        <tbody id="bench-body"></tbody>
+      </table>
+    </div>
+    <div style="margin-top:1.5rem">
+      <h2 style="font-size:.9rem;color:#6b7280;margin-bottom:.6rem">Run History</h2>
+      <table>
+        <thead><tr>
+          <th>Run ID</th><th>Task</th><th>A tests</th><th>B tests</th><th>C tests</th><th>RTK saving</th>
+        </tr></thead>
+        <tbody id="bench-history"></tbody>
+      </table>
+    </div>
+  </section>
   <section>
     <h2>Chat Prompts</h2>
     <table><thead><tr>
@@ -114,20 +139,22 @@ async function load() {
 }
 
 function render(rows) {
-  const pipeline = rows.filter(r => r.model_type === 'pipeline' && !r.error);
-  const chat = rows.filter(r => r.model_type !== 'pipeline');
+  const pipeline  = rows.filter(r => r.model_type === 'pipeline' && !r.error);
+  const chat      = rows.filter(r => r.model_type !== 'pipeline' && r.model_type !== 'bench_run');
+  const benchRuns = rows.filter(r => r.model_type === 'bench_run');
 
   // Cards
-  const runs = [...new Set(rows.map(r => r.run_id))];
+  const runs   = [...new Set(rows.map(r => r.run_id))];
   const models = [...new Set(rows.map(r => r.model))];
   document.getElementById('cards').innerHTML = [
-    { val: runs.length, lbl: 'Total runs' },
-    { val: models.length, lbl: 'Models' },
-    { val: pipeline.length / 2 | 0, lbl: 'RTK pairs' },
-    { val: chat.filter(r => !r.error).length, lbl: 'Chat samples' },
+    { val: runs.length,                        lbl: 'Total runs' },
+    { val: models.length,                      lbl: 'Models' },
+    { val: pipeline.length / 2 | 0,           lbl: 'RTK pairs' },
+    { val: chat.filter(r => !r.error).length,  lbl: 'Chat samples' },
   ].map(c => `<div class="card"><div class="val">${c.val}</div><div class="lbl">${c.lbl}</div></div>`).join('');
 
   renderRtk(pipeline);
+  renderBenchRuns(benchRuns);
   renderChat(chat);
 }
 
@@ -221,6 +248,176 @@ function renderRtk(rows) {
         }
       }
     }));
+  }
+}
+
+function renderBenchRuns(rows) {
+  // Group rows by run_id — each group is one A/B or A/B/C comparison set
+  const groups = {};
+  for (const r of rows) {
+    if (!groups[r.run_id]) groups[r.run_id] = [];
+    groups[r.run_id].push(r);
+  }
+  const sortedIds = Object.keys(groups).sort().reverse();
+
+  if (!sortedIds.length) {
+    document.getElementById('bench-cards').innerHTML =
+      '<p class="empty">No bench runs yet — run: python3 bench.py "your task"</p>';
+    return;
+  }
+
+  // Summary cards from most recent group
+  const latest = groups[sortedIds[0]];
+  const a = latest.find(r => r.label.startsWith('A')) || {};
+  const b = latest.find(r => r.label.startsWith('B')) || {};
+  const c = latest.find(r => r.label.startsWith('C'));
+
+  const rtkSaving = a.qwen_in && b.qwen_in
+    ? Math.round((a.qwen_in - b.qwen_in) / a.qwen_in * 100) + '%'
+    : '—';
+  const bestTests = Math.max(a.tests_passed || 0, b.tests_passed || 0, c ? (c.tests_passed || 0) : 0);
+  const phasesCost = c ? fmt(c.claude_in) + ' tokens' : '—';
+
+  document.getElementById('bench-cards').innerHTML = [
+    { val: sortedIds.length,  lbl: 'Bench run sets' },
+    { val: rtkSaving,         lbl: 'RTK token saving (latest)' },
+    { val: bestTests + '/' + (a.tests_passed != null ? (a.tests_passed + a.tests_failed) : '?'), lbl: 'Best test score' },
+    { val: phasesCost,        lbl: 'Phases Claude cost' },
+  ].map(card => `<div class="card"><div class="val">${card.val}</div><div class="lbl">${card.lbl}</div></div>`).join('');
+
+  // Show/hide C column
+  const hasC = !!c;
+  document.getElementById('bench-col-c').style.display = hasC ? '' : 'none';
+  if (a.label) document.getElementById('bench-col-a').textContent = a.label;
+  if (b.label) document.getElementById('bench-col-b').textContent = b.label;
+  if (c)       document.getElementById('bench-col-c').textContent = c.label;
+
+  function qCell(val, base) {
+    const num = fmt(val);
+    if (!base || val === base) return num;
+    const d = val - base, pct = d / base * 100;
+    const cls = d < 0 ? 'delta-pos' : 'delta-neg';
+    return `${num} <span class="${cls}">${d < 0 ? '▼' : '▲'}${Math.abs(pct).toFixed(1)}%</span>`;
+  }
+
+  function qQual(val, base, higherIsBetter) {
+    const num = fmt(val);
+    if (!base || val === base) return num;
+    const d = val - base;
+    const improved = higherIsBetter ? d > 0 : d < 0;
+    const cls = improved ? 'delta-pos' : 'delta-neg';
+    return `${num} <span class="${cls}">${d > 0 ? '▲' : '▼'}${Math.abs(d)}</span>`;
+  }
+
+  const ROWS = [
+    ['Token Efficiency', null, null],
+    ['Qwen input tokens',    'qwen_in',         'token'],
+    ['Qwen output tokens',   'qwen_out',        'token'],
+    ['Tool resp bytes',      'tool_bytes',      'token'],
+    ['Claude input tokens',  'claude_in',       'token'],
+    ['Claude output tokens', 'claude_out',      'token'],
+    ['Output Quality', null, null],
+    ['Steps completed',      'steps_completed', 'qual-high'],
+    ['Tests passed',         'tests_passed',    'qual-high'],
+    ['Tests failed',         'tests_failed',    'qual-low'],
+    ['Run Info', null, null],
+    ['Wall time (s)',         'wall_time_s',     'token'],
+  ];
+
+  const tbody = document.getElementById('bench-body');
+  tbody.innerHTML = '';
+  for (const [label, key, type] of ROWS) {
+    if (!key) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td colspan="4" style="background:#12121a;color:#6b7280;font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;padding:.3rem .7rem">${label}</td>`;
+      tbody.appendChild(tr);
+      continue;
+    }
+    const tr = document.createElement('tr');
+    const aVal = a[key] ?? 0, bVal = b[key] ?? 0, cVal = c ? (c[key] ?? 0) : null;
+    let bCell, cCell;
+    if (type === 'token') {
+      bCell = qCell(bVal, aVal);
+      cCell = cVal != null ? qCell(cVal, aVal) : '—';
+    } else if (type === 'qual-high') {
+      bCell = qQual(bVal, aVal, true);
+      cCell = cVal != null ? qQual(cVal, aVal, true) : '—';
+    } else {
+      bCell = qQual(bVal, aVal, false);
+      cCell = cVal != null ? qQual(cVal, aVal, false) : '—';
+    }
+    tr.innerHTML = `
+      <td style="padding:.4rem .7rem">${label}</td>
+      <td style="text-align:right;padding:.4rem .7rem;font-family:monospace">${fmt(aVal)}</td>
+      <td style="text-align:right;padding:.4rem .7rem;font-family:monospace">${bCell}</td>
+      <td style="text-align:right;padding:.4rem .7rem;font-family:monospace;display:${hasC ? '' : 'none'}">${cCell}</td>`;
+    tbody.appendChild(tr);
+  }
+
+  // Charts
+  charts.forEach(ch => ch.destroy()); charts = [];
+  const chartsDiv = document.getElementById('bench-charts');
+  chartsDiv.innerHTML = '';
+
+  const chartDefs = [
+    { key: 'qwen_in',      label: 'Qwen Input Tokens',  colors: ['rgba(248,113,113,.7)', 'rgba(134,239,172,.7)', 'rgba(167,139,250,.7)'] },
+    { key: 'tests_passed', label: 'Tests Passed',        colors: ['rgba(248,113,113,.7)', 'rgba(134,239,172,.7)', 'rgba(167,139,250,.7)'] },
+  ];
+
+  for (const def of chartDefs) {
+    const wrap = document.createElement('div');
+    wrap.className = 'chart-wrap';
+    wrap.innerHTML = `<h3>${def.label}</h3><canvas></canvas>`;
+    chartsDiv.appendChild(wrap);
+    const labels = sortedIds.map(id => id.replace(/^(\d{4})(\d{2})(\d{2})_/, '$1-$2-$3 '));
+    const datasets = ['A', 'B', 'C'].map((letter, i) => ({
+      label: letter,
+      data: sortedIds.map(id => {
+        const run = groups[id].find(r => r.label.startsWith(letter));
+        return run ? (run[def.key] || 0) : 0;
+      }),
+      backgroundColor: def.colors[i],
+      borderRadius: 4,
+    })).filter((_, i) => i < 2 || hasC);
+    charts.push(new Chart(wrap.querySelector('canvas'), {
+      type: 'bar',
+      data: { labels, datasets },
+      options: {
+        responsive: true,
+        plugins: { legend: { labels: { color: '#9ca3af', font: { size: 11 } } } },
+        scales: {
+          x: { ticks: { color: '#6b7280', font: { size: 10 } }, grid: { color: '#1e1e2e' } },
+          y: { ticks: { color: '#6b7280', font: { size: 10 } }, grid: { color: '#1e1e2e' } },
+        }
+      }
+    }));
+  }
+
+  // History table
+  const histBody = document.getElementById('bench-history');
+  histBody.innerHTML = '';
+  for (const rid of sortedIds) {
+    const grp = groups[rid];
+    const ra = grp.find(r => r.label.startsWith('A')) || {};
+    const rb = grp.find(r => r.label.startsWith('B')) || {};
+    const rc = grp.find(r => r.label.startsWith('C'));
+    const saving = ra.qwen_in && rb.qwen_in
+      ? '<span class="delta-pos">▼' + Math.round((ra.qwen_in - rb.qwen_in) / ra.qwen_in * 100) + '%</span>'
+      : '—';
+    const taskSnip = (ra.task || rb.task || '').slice(0, 50) + '…';
+    const testCell = (t) => t == null ? '—'
+      : t.tests_failed === 0
+        ? `<span class="delta-pos">${t.tests_passed}/${t.tests_passed + t.tests_failed} ✓</span>`
+        : `<span class="delta-neg">${t.tests_passed}/${t.tests_passed + t.tests_failed} ✗</span>`;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="run-label">${rid}</td>
+      <td style="font-size:.75rem;color:#9ca3af">${taskSnip}</td>
+      <td>${testCell(ra)}</td>
+      <td>${testCell(rb)}</td>
+      <td>${testCell(rc)}</td>
+      <td>${saving}</td>`;
+    histBody.appendChild(tr);
   }
 }
 
