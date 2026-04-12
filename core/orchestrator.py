@@ -8,7 +8,7 @@ from core.executor import Executor
 from models.claude_client import ClaudeClient
 from config.settings import ENABLE_REVIEWER, MAX_RETRIES, get_workspace
 from utils.logger import get_logger
-from utils.token_tracker import tracker as _tracker
+from utils.token_tracker import get_tracker
 
 log = get_logger(__name__)
 
@@ -189,8 +189,8 @@ class Orchestrator:
             f"\n[orchestrator] Done. "
             f"Completed: {completed} | Failed: {failed} | Skipped: {skipped}"
         )
-        if _tracker.has_data():
-            log.info("\n" + _tracker.summary())
+        if get_tracker().has_data():
+            log.info("\n" + get_tracker().summary())
 
         # Clean up plan file on full success
         if not failed and not skipped:
