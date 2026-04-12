@@ -31,12 +31,17 @@ def _trim_messages(messages: list[dict]) -> list[dict]:
 
     cutoff = tool_indices[-_TRIM_KEEP_TURNS]  # compress everything before this index
     trimmed = []
+    _did_trim = False
     for i, m in enumerate(messages):
         if i < cutoff and m.get("role") == "tool":
             content = m.get("content", "")
             if len(content) > _TRIM_MAX_BYTES:
+                get_tracker().trim_bytes_saved += len(content) - _TRIM_MAX_BYTES
+                _did_trim = True
                 m = {**m, "content": content[:_TRIM_MAX_BYTES] + " …[trimmed]"}
         trimmed.append(m)
+    if _did_trim:
+        get_tracker().trim_events += 1
     return trimmed
 
 
