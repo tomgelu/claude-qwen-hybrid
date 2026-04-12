@@ -9,7 +9,7 @@ if os.path.isfile(_env_file):
             if _line and not _line.startswith("#") and "=" in _line:
                 _k, _, _v = _line.partition("=")
                 _k = _k.strip()
-                _v = _v.strip().strip('"').strip("'")
+                _v = _v.split("#")[0].strip().strip('"').strip("'")
                 os.environ.setdefault(_k, _v)
 
 
@@ -32,3 +32,9 @@ STREAM_OUTPUT = os.environ.get("STREAM_OUTPUT", "true").lower() == "true"
 
 # Reviewer settings
 ENABLE_REVIEWER = os.environ.get("ENABLE_REVIEWER", "false").lower() == "true"
+
+# Multi-phase execution
+ENABLE_PHASES = os.environ.get('ENABLE_PHASES', 'false').lower() == 'true'
+CLAUDE_COST_BUDGET_USD = float(os.environ.get('CLAUDE_COST_BUDGET_USD', '0.0'))
+CLAUDE_TOKEN_BUDGET = int(os.environ.get('CLAUDE_TOKEN_BUDGET', '0'))
+CLAUDE_BUDGET_THRESHOLD = float(os.environ.get('CLAUDE_BUDGET_THRESHOLD', '0.80'))

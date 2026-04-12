@@ -47,3 +47,29 @@ def validate_plan(plan: Any) -> dict:
         "steps": normalized_steps,
         "constraints": [str(c).strip() for c in plan["constraints"]],
     }
+
+def validate_brainstorm(data: Any) -> dict:
+    if not isinstance(data, dict):
+        raise ValidationError('Brainstorm result must be a JSON object')
+    for key in ('intent', 'approaches', 'ambiguities', 'recommended_approach'):
+        if key not in data:
+            raise ValidationError(f'Brainstorm missing field: {key}')
+    return {
+        'intent': str(data.get('intent', '')),
+        'approaches': data.get('approaches', []),
+        'ambiguities': [str(a) for a in data.get('ambiguities', [])],
+        'recommended_approach': str(data.get('recommended_approach', '')),
+    }
+
+def validate_spec(data: Any) -> dict:
+    if not isinstance(data, dict):
+        raise ValidationError('Spec result must be a JSON object')
+    for key in ('requirements', 'constraints', 'expected_outputs', 'out_of_scope'):
+        if key not in data:
+            raise ValidationError(f'Spec missing field: {key}')
+    return {
+        'requirements': [str(r) for r in data.get('requirements', [])],
+        'constraints': [str(c) for c in data.get('constraints', [])],
+        'expected_outputs': [str(o) for o in data.get('expected_outputs', [])],
+        'out_of_scope': [str(s) for s in data.get('out_of_scope', [])],
+    }

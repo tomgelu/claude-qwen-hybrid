@@ -1,3 +1,4 @@
+import json
 import os
 from models.claude_client import ClaudeClient
 from core.validator import validate_plan
@@ -12,10 +13,15 @@ class Planner:
         self.client = ClaudeClient()
         self.claude_available = True  # 🔥 runtime flag
 
-    def plan(self, user_input: str) -> dict:
+    def plan(self, user_input: str, brainstorm: dict = None, spec: dict = None) -> dict:
         workspace = get_workspace()
         ws_context = self._workspace_context(workspace)
 
+        # Append brainstorm and spec context if provided by the phase pipeline
+        if brainstorm is not None:
+            ws_context += f'\n\nBrainstorm analysis:\n{json.dumps(brainstorm, indent=2)}'
+        if spec is not None:
+            ws_context += f'\n\nSpec:\n{json.dumps(spec, indent=2)}'
         # 🔥 Try Claude ONLY if still available
         if self.claude_available:
             try:

@@ -47,6 +47,43 @@ Analyze the result of the given execution step and return ONLY valid JSON:
 Set validation to "fail" only if there are correctness bugs, test failures, or missing required behaviour.
 Style or minor improvements alone should not cause a "fail"."""
 
+BRAINSTORM_SYSTEM_PROMPT = """You are a brainstorming agent.
+
+Analyze the user goal and return ONLY valid JSON with this exact schema:
+
+{
+  "intent": string,
+  "approaches": [{"name": string, "description": string, "trade_offs": string}],
+  "ambiguities": [string],
+  "recommended_approach": string
+}
+
+Rules:
+- intent: what the user actually wants to achieve (1-2 sentences)
+- approaches: 2-4 concrete implementation options with honest trade-offs
+- ambiguities: open questions that would affect implementation if answered differently
+- recommended_approach: the name from approaches[] you would choose and why (1-2 sentences)
+- Output ONLY the JSON object. No explanations, no markdown fences."""
+
+SPEC_SYSTEM_PROMPT = """You are a spec-writing agent.
+
+Given the brainstorm analysis in the user message, produce a precise specification.
+Return ONLY valid JSON with this exact schema:
+
+{
+  "requirements": [string],
+  "constraints": [string],
+  "expected_outputs": [string],
+  "out_of_scope": [string]
+}
+
+Rules:
+- requirements: concrete, testable statements of what must be true
+- constraints: technical or environmental limits that shape the solution
+- expected_outputs: what "done" looks like — files, behaviours, test results
+- out_of_scope: explicitly excluded to prevent scope creep
+- Output ONLY the JSON object. No explanations, no markdown fences."""
+
 
 def _strip_json_fences(raw: str) -> str:
     match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", raw)
@@ -143,3 +180,37 @@ class ClaudeClient:
         except Exception as e:
             self.enabled = False  # 🔥 disable permanently
             raise RuntimeError(f"Claude reviewer failed: {e}")
+
+    def call(self, system_prompt: str, user_message: str) -> dict:
+        """Generic structured call — used by phase runner for brainstorm/spec."""
+        if not self.enabled:
+            raise RuntimeError("Claude disabled")
+        try:
+            raw = _call_claude(system_prompt, user_message, self.model)
+            return json.loads(raw)
+        except Exception as e:
+            self.enabled = False  # 🔥 disable permanently
+            raise RuntimeError(f"Claude call failed: {e}")
+
+    def brainstorm(self, user_input: str) -> dict:
+        """Run the brainstorm phase — returns structured BrainstormResult."""
+        if not self.enabled:
+            raise RuntimeError("Claude disabled")
+        try:
+            raw = _call_claude(BRAINSTORM_SYSTEM_PROMPT, f"User goal:\n{user_input}", self.model)
+            return json.loads(raw)
+        except Exception as e:
+            self.enabled = False  # 🔥 disable permanently
+            raise RuntimeError(f"Claude brainstorm failed: {e}")
+
+    def spec(self, user_input: str, brainstorm_result: dict) -> dict:
+        """Run the spec phase — returns structured SpecResult."""
+        if not self.enabled:
+            raise RuntimeError("Claude disabled")
+        msg = f"User goal:\n{user_input}\n\nBrainstorm:\n{json.dumps(brainstorm_result, indent=2)}"
+        try:
+            raw = _call_claude(SPEC_SYSTEM_PROMPT, msg, self.model)
+            return json.loads(raw)
+        except Exception as e:
+            self.enabled = False  # 🔥 disable permanently
+            raise RuntimeError(f"Claude spec failed: {e}")

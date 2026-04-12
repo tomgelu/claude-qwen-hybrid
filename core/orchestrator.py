@@ -3,10 +3,19 @@ import os
 import threading
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 
+import requests
+
 from core.planner import Planner
 from core.executor import Executor
-from models.claude_client import ClaudeClient
-from config.settings import ENABLE_REVIEWER, MAX_RETRIES, get_workspace
+from core.router import route_phase
+from core.validator import validate_brainstorm, validate_spec
+from models.claude_client import ClaudeClient, BRAINSTORM_SYSTEM_PROMPT, SPEC_SYSTEM_PROMPT
+from config.settings import (
+    ENABLE_REVIEWER, MAX_RETRIES, get_workspace,
+    ENABLE_PHASES,
+    CLAUDE_COST_BUDGET_USD, CLAUDE_TOKEN_BUDGET, CLAUDE_BUDGET_THRESHOLD,
+    LOCAL_MODEL_URL, LOCAL_MODEL_NAME, LOCAL_MODEL_TIMEOUT,
+)
 from utils.logger import get_logger
 from utils.token_tracker import get_tracker
 
@@ -45,7 +54,130 @@ def _load_plan() -> tuple[dict, dict] | None:
 class Orchestrator:
     def __init__(self):
         self.planner = Planner()
-        self.reviewer = ClaudeClient() if ENABLE_REVIEWER else None
+        self.claude_client = ClaudeClient()
+        self.reviewer = self.claude_client if ENABLE_REVIEWER else None
+        # Set to True once Claude hits rate limit — all subsequent phase calls use local
+        self._claude_degraded = False
+
+    # ── Budget check ──────────────────────────────────────────────────────────
+
+    def _budget_exceeded(self) -> bool:
+        """Return True if Claude spend has crossed the configured threshold."""
+        tracker = get_tracker()
+
+        # USD budget (preferred — works on API billing)
+        if CLAUDE_COST_BUDGET_USD > 0:
+            spent = tracker._claude_cost_usd
+            limit = CLAUDE_COST_BUDGET_USD * CLAUDE_BUDGET_THRESHOLD
+            if spent >= limit:
+                log.warning(
+                    f"[budget] ${spent:.4f} spent ≥ {CLAUDE_BUDGET_THRESHOLD*100:.0f}% of "
+                    f"${CLAUDE_COST_BUDGET_USD:.2f} budget — routing to local"
+                )
+                return True
+
+        # Token budget fallback (for subscription mode where cost is always 0)
+        if CLAUDE_TOKEN_BUDGET > 0:
+            spent = tracker._claude_input
+            limit = CLAUDE_TOKEN_BUDGET * CLAUDE_BUDGET_THRESHOLD
+            if spent >= limit:
+                log.warning(
+                    f"[budget] {spent:,} input tokens ≥ {CLAUDE_BUDGET_THRESHOLD*100:.0f}% of "
+                    f"{CLAUDE_TOKEN_BUDGET:,} token budget — routing to local"
+                )
+                return True
+
+        return False
+
+    # ── Local model chat (single, no tool loop) ───────────────────────────────
+
+    def _call_local(self, system_prompt: str, user_message: str) -> dict:
+        """Call the local model for a single chat turn and return parsed JSON."""
+        payload = {
+            "model": LOCAL_MODEL_NAME,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ],
+            "temperature": 0.0,
+        }
+        resp = requests.post(LOCAL_MODEL_URL, json=payload, timeout=LOCAL_MODEL_TIMEOUT)
+        resp.raise_for_status()
+        content = resp.json()["choices"][0]["message"]["content"].strip()
+        # Strip markdown fences if present
+        import re
+        match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", content)
+        if match:
+            content = match.group(1).strip()
+        return json.loads(content)
+
+    # ── Centralized model call with budget-aware routing ─────────────────────
+
+    def _call_model(self, phase: str, system_prompt: str, user_message: str) -> dict:
+        """
+        Route a phase call to Claude or local model.
+
+        Routing order:
+          1. route_phase() gives the default model for this phase.
+          2. If Claude is the default but budget is exceeded → downgrade to local.
+          3. If Claude call raises a rate-limit error → degrade permanently to local.
+          4. Local model is always a fallback and never budget-gated.
+        """
+        target = route_phase(phase)
+
+        if target == "claude" and (self._claude_degraded or self._budget_exceeded()):
+            log.info(f"[phase] {phase} → falling back to local model")
+            target = "local"
+
+        if target == "claude":
+            try:
+                return self.claude_client.call(system_prompt, user_message)
+            except RuntimeError as e:
+                if "rate" in str(e).lower() or "limit" in str(e).lower():
+                    log.warning(f"[budget] Claude rate limited on phase={phase} — degrading to local for session")
+                    self._claude_degraded = True
+                else:
+                    log.warning(f"[phase] Claude failed on phase={phase} ({e}) — falling back to local")
+                return self._call_local(system_prompt, user_message)
+
+        # target == "local"
+        return self._call_local(system_prompt, user_message)
+
+    # ── Phase: brainstorm ─────────────────────────────────────────────────────
+
+    def _brainstorm(self, user_input: str) -> dict:
+        """
+        Phase 1 — clarify intent, surface approaches, flag ambiguities.
+        Returns a validated BrainstormResult dict.
+        """
+        log.info("[phase] brainstorm ...")
+        user_message = f"User goal:\n{user_input}"
+        raw = self._call_model("brainstorm", BRAINSTORM_SYSTEM_PROMPT, user_message)
+        result = validate_brainstorm(raw)
+        log.info(f"[phase] brainstorm done — intent: {result['intent'][:80]}")
+        log.info(f"[phase] brainstorm — recommended: {result['recommended_approach'][:80]}")
+        return result
+
+    # ── Phase: spec ───────────────────────────────────────────────────────────
+
+    def _spec(self, user_input: str, brainstorm: dict | None) -> dict:
+        """
+        Phase 2 — convert brainstorm into structured requirements.
+        Returns a validated SpecResult dict.
+        """
+        log.info("[phase] spec ...")
+        ctx = json.dumps(brainstorm, indent=2) if brainstorm else "{}"
+        user_message = (
+            f"User goal:\n{user_input}\n\n"
+            f"Brainstorm:\n{ctx}"
+        )
+        raw = self._call_model("spec", SPEC_SYSTEM_PROMPT, user_message)
+        result = validate_spec(raw)
+        log.info(f"[phase] spec done — {len(result['requirements'])} requirements, "
+                 f"{len(result['constraints'])} constraints")
+        return result
+
+    # ── Main run ──────────────────────────────────────────────────────────────
 
     def run(self, user_input: str, dry_run: bool = False, resume: bool = False,
             plan: dict | None = None) -> dict:
@@ -68,7 +200,29 @@ class Orchestrator:
 
             if not resume:
                 log.info(f"\n[orchestrator] Planning for: {user_input}\n")
-                plan = self.planner.plan(user_input)
+
+                brainstorm_result = None
+                spec_result = None
+
+                if ENABLE_PHASES:
+                    # ── Phase: brainstorm ─────────────────────────────────────
+                    try:
+                        brainstorm_result = self._brainstorm(user_input)
+                    except Exception as e:
+                        log.warning(f"[orchestrator] Brainstorm phase failed: {e} — continuing without")
+
+                    # ── Phase: spec ───────────────────────────────────────────
+                    try:
+                        spec_result = self._spec(user_input, brainstorm_result)
+                    except Exception as e:
+                        log.warning(f"[orchestrator] Spec phase failed: {e} — continuing without")
+
+                # ── Phase: plan ───────────────────────────────────────────────
+                plan = self.planner.plan(
+                    user_input,
+                    brainstorm=brainstorm_result,
+                    spec=spec_result,
+                )
 
         log.info(f"[orchestrator] Goal: {plan['goal']}")
         log.info(f"[orchestrator] Steps ({len(plan['steps'])}):")

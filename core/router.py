@@ -97,3 +97,10 @@ def route(task: str) -> str:
         decision = _heuristic_route(task)
     log.info(f"[router] '{task[:60]}{'...' if len(task) > 60 else ''}' → {decision} (mode={mode})")
     return decision
+
+def route_phase(phase: str) -> str:
+    '''Return claude or local for the given phase name.'''
+    LOCAL_PHASES = {'execute'}
+    model = 'local' if phase in LOCAL_PHASES else 'claude'
+    log.info(f'[router] phase={phase} → {model}')
+    return model
