@@ -106,16 +106,18 @@ Add these to the pipeline JSONL record. Makes the token cost of retries and revi
 
 ## 3. Task Suite
 
-Replace the single `fibonacci` pipeline task with four tasks that cover distinct workload shapes. All tasks are defined in a `PIPELINE_TASKS` list in `benchmark.py`. Each task runs as an RTK pair (same shared plan, RTK off then on).
+Replace the single `fibonacci` pipeline task with four tasks that cover distinct workload shapes. Tasks are deliberately non-trivial — avoid problems every LLM has memorized (no fibonacci, no FizzBuzz) so the agent must actually reason, read, and navigate the workspace rather than regurgitate.
+
+All tasks are defined in a `PIPELINE_TASKS` list in `benchmark.py`. Each runs as an RTK pair (same shared plan, RTK off then on).
 
 | ID | Description | Key tools exercised | Expected turns |
 |----|-------------|---------------------|----------------|
-| `fibonacci` | Create fib.py CLI + test_fib.py, run tests | `write_file`, `run_command`, `run_tests` | ~5 |
-| `multifile_refactor` | Split a monolithic Python file into two modules, update imports | `read_file`, `write_file`, `replace_lines`, `search_files` | ~10 |
-| `test_writer` | Given an implementation file, write a pytest suite covering edge cases | `read_file`, `write_file`, `run_tests` | ~8 |
-| `git_workflow` | Make a small targeted change, stage, commit with message, show diff | `read_file`, `replace_lines`, `git_commit`, `git_diff`, `git_status` | ~5 |
+| `csv_pipeline` | Build a CLI tool that reads a CSV, computes per-column statistics (mean, median, stddev, nulls), and writes a Markdown summary report. Accept `--input` and `--output` flags. Add tests that cover edge cases (empty column, all-null column, single row). | `write_file`, `run_command`, `run_tests`, `read_file` | ~12 |
+| `multifile_refactor` | Given a seed monolithic `store.py` (~120 lines: mixed data models, business logic, I/O), split it into `models.py`, `storage.py`, and `cli.py`. Update all imports. All existing tests must still pass. | `read_file`, `write_file`, `replace_lines`, `search_files`, `run_tests` | ~15 |
+| `bug_hunt` | Given a seed `server.py` with 3 deliberately injected bugs (off-by-one in pagination, wrong HTTP status code on 404, missing input sanitization), find and fix all three. Each fix must be verified by a targeted test. | `read_file`, `search_files`, `replace_lines`, `run_tests`, `run_command` | ~12 |
+| `git_audit` | In a pre-seeded repo with 5 commits, identify all files changed in the last 3 commits, produce a `CHANGELOG.md` entry summarising the changes grouped by type (feat/fix/chore), then make one final targeted fix to a known broken import introduced in the most recent commit. | `git_status`, `git_diff`, `read_file`, `replace_lines`, `git_commit`, `run_command` | ~10 |
 
-**Task fixture approach:** Each task gets a `setup` callable that creates the necessary starting files in the workspace before the pipeline runs. `fibonacci` and `git_workflow` need no setup. `multifile_refactor` and `test_writer` need a seed file written first.
+**Task fixture approach:** Each task gets a `setup(workspace)` callable that writes the necessary seed files before the pipeline runs. `csv_pipeline` needs no setup. `multifile_refactor`, `bug_hunt`, and `git_audit` each need a seed file (or repo state) written first — fixtures are defined inline in `benchmark.py` as multi-line string constants.
 
 **Timeout:** Increase pipeline timeout from 120s/150s to 240s to accommodate the longer-turn tasks.
 
@@ -140,7 +142,7 @@ Three new charts added to `bench_viewer.py`. All use the existing Chart.js setup
 - Separate from pipeline runs (chat prompts have more reliable latency samples)
 
 ### 4.4 Per-task RTK savings table
-In the existing RTK savings table, add a `task_id` column so savings from `fibonacci`, `multifile_refactor`, `test_writer`, and `git_workflow` are shown as separate rows rather than collapsed into a single pipeline entry per run.
+In the existing RTK savings table, add a `task_id` column so savings from `csv_pipeline`, `multifile_refactor`, `bug_hunt`, and `git_audit` are shown as separate rows rather than collapsed into a single pipeline entry per run. This makes it possible to see whether RTK saves more on bash-heavy tasks (`bug_hunt`, `git_audit`) vs file-heavy ones (`multifile_refactor`).
 
 ---
 
