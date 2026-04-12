@@ -17,14 +17,18 @@ Usage:
 """
 
 import argparse
+import json
 import os
 import re
 import subprocess
 import sys
 import shutil
 import tempfile
+import time
 import importlib
 import threading
+from datetime import datetime
+from pathlib import Path
 
 DEFAULT_TASK = (
     "Build a Python CLI tool in csv_stats.py that reads a CSV file and computes "
@@ -77,6 +81,48 @@ def capture_quality(workspace: str, state: dict) -> dict:
     }
 
 
+_RESULTS_FILE = Path(__file__).parent / "benchmark_results.jsonl"
+
+
+def _write_bench_results(
+    run_id: str,
+    task: str,
+    stats_list: list[dict],
+    out_path=None,
+) -> None:
+    """
+    Append one JSON record per run to benchmark_results.jsonl.
+
+    Each record carries model_type="bench_run" so bench_viewer.py can
+    filter it from chat/pipeline rows.
+
+    out_path: override the default file path (used in tests).
+    """
+    path = Path(out_path) if out_path else _RESULTS_FILE
+    with open(path, "a") as f:
+        for stats in stats_list:
+            record = {
+                "run_id":          run_id,
+                "model_type":      "bench_run",
+                "task":            task,
+                "label":           stats.get("label", ""),
+                "use_rtk":         stats.get("use_rtk", False),
+                "phases_enabled":  stats.get("phases_enabled", False),
+                "qwen_in":         stats.get("qwen_in", 0),
+                "qwen_out":        stats.get("qwen_out", 0),
+                "tool_bytes":      stats.get("tool_bytes", 0),
+                "claude_in":       stats.get("claude_in", 0),
+                "claude_out":      stats.get("claude_out", 0),
+                "steps_completed": stats.get("steps_completed", 0),
+                "steps_failed":    stats.get("steps_failed", 0),
+                "steps_total":     stats.get("steps_total", 0),
+                "tests_passed":    stats.get("tests_passed", 0),
+                "tests_failed":    stats.get("tests_failed", 0),
+                "wall_time_s":     stats.get("wall_time_s", 0),
+            }
+            f.write(json.dumps(record) + "\n")
+
+
 def _fresh_modules():
     """Blow away all cached imports from this project so tracker resets cleanly."""
     for mod_name in list(sys.modules.keys()):
@@ -91,7 +137,7 @@ def _average_stats(stats_list: list[dict]) -> dict:
         return {}
     keys = ["qwen_in", "qwen_out", "tool_bytes", "claude_in", "claude_out",
             "steps_completed", "steps_failed", "steps_total",
-            "tests_passed", "tests_failed"]
+            "tests_passed", "tests_failed", "wall_time_s"]
     avg = {**stats_list[0]}
     for key in keys:
         avg[key] = int(sum(s[key] for s in stats_list) / len(stats_list))
@@ -227,9 +273,11 @@ def run_once(label: str, use_rtk: bool, workspace: str, plan: dict,
         except Exception as e:
             exc_holder.append(e)
 
+    t_start = time.time()
     t = threading.Thread(target=_run, daemon=True)
     t.start()
     t.join(timeout=RUN_TIMEOUT)
+    wall_time_s = int(time.time() - t_start)
     if t.is_alive():
         print(f"\n  [bench] RUN {label} timed out after {RUN_TIMEOUT}s — partial results only",
               flush=True)
@@ -241,13 +289,15 @@ def run_once(label: str, use_rtk: bool, workspace: str, plan: dict,
 
     tr = get_tracker()
     return {
-        "label":     label,
-        "use_rtk":   use_rtk,
-        "qwen_in":   tr._qwen_input,
-        "qwen_out":  tr._qwen_output,
-        "tool_bytes": tr.tool_response_bytes,
-        "claude_in":  tr._claude_input,
-        "claude_out": tr._claude_output,
+        "label":          label,
+        "use_rtk":        use_rtk,
+        "phases_enabled": enable_phases,
+        "qwen_in":        tr._qwen_input,
+        "qwen_out":       tr._qwen_output,
+        "tool_bytes":     tr.tool_response_bytes,
+        "claude_in":      tr._claude_input,
+        "claude_out":     tr._claude_output,
+        "wall_time_s":    wall_time_s,
         **quality,
     }
 
@@ -311,6 +361,11 @@ def main():
 
     print("\n")
     print(format_results_table(runs, task))
+
+    # Persist results to benchmark_results.jsonl for bench_viewer.py
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    _write_bench_results(run_id, task, all_a + all_b + all_c)
+    print(f"\n  Results saved → benchmark_results.jsonl  (run_id={run_id})")
 
 
 if __name__ == "__main__":
