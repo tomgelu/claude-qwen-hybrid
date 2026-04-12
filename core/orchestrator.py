@@ -47,23 +47,28 @@ class Orchestrator:
         self.planner = Planner()
         self.reviewer = ClaudeClient() if ENABLE_REVIEWER else None
 
-    def run(self, user_input: str, dry_run: bool = False, resume: bool = False) -> dict:
+    def run(self, user_input: str, dry_run: bool = False, resume: bool = False,
+            plan: dict | None = None) -> dict:
         # ── Load or generate plan ─────────────────────────────────────────────
-        step_statuses: dict[str, str] = {}
+        if plan is not None:
+            log.info(f"[orchestrator] Using pre-supplied plan: {plan['goal']}")
+            step_statuses: dict[str, str] = {}
+        else:
+            step_statuses: dict[str, str] = {}
 
-        if resume:
-            saved = _load_plan()
-            if saved:
-                plan, step_statuses = saved
-                log.info(f"[orchestrator] Resuming plan: {plan['goal']}")
-                log.info(f"[orchestrator] Already completed: {[k for k,v in step_statuses.items() if v == 'completed']}")
-            else:
-                log.info("[orchestrator] No saved plan found — starting fresh")
-                resume = False
+            if resume:
+                saved = _load_plan()
+                if saved:
+                    plan, step_statuses = saved
+                    log.info(f"[orchestrator] Resuming plan: {plan['goal']}")
+                    log.info(f"[orchestrator] Already completed: {[k for k,v in step_statuses.items() if v == 'completed']}")
+                else:
+                    log.info("[orchestrator] No saved plan found — starting fresh")
+                    resume = False
 
-        if not resume:
-            log.info(f"\n[orchestrator] Planning for: {user_input}\n")
-            plan = self.planner.plan(user_input)
+            if not resume:
+                log.info(f"\n[orchestrator] Planning for: {user_input}\n")
+                plan = self.planner.plan(user_input)
 
         log.info(f"[orchestrator] Goal: {plan['goal']}")
         log.info(f"[orchestrator] Steps ({len(plan['steps'])}):")
@@ -210,6 +215,7 @@ class Orchestrator:
                 result = executor.run(step, context=context, prior_attempt=prior_attempt)
 
                 if result["status"] == "max_turns":
+                    get_tracker().retry_count += 1
                     log.warning(
                         f"  [retry {attempt}/{MAX_RETRIES}] step {step['id']} max turns"
                         + (" — retrying" if attempt < MAX_RETRIES else " — giving up")
@@ -220,10 +226,12 @@ class Orchestrator:
                     continue
 
                 if result["status"] == "success" and self.reviewer:
+                    get_tracker().reviewer_calls += 1
                     review = self.reviewer.review(result)
                     result["review"] = review
                     log.info(f"  [review] {review.get('validation', 'N/A')}: {review.get('summary', '')}")
                     if review.get("validation") == "fail" and attempt < MAX_RETRIES:
+                        get_tracker().retry_count += 1
                         issues = "; ".join(review.get("issues", []))
                         log.warning(f"  [retry {attempt}/{MAX_RETRIES}] review failed: {issues}")
                         prior_attempt = result
