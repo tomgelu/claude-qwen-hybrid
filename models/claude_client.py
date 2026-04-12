@@ -85,8 +85,8 @@ def _call_claude(system_prompt: str, user_message: str, model: str) -> str:
         wrapper = json.loads(result.stdout)
 
         usage = wrapper.get("usage", {})
-        from utils.token_tracker import tracker
-        tracker.add_claude(
+        from utils.token_tracker import get_tracker
+        get_tracker().add_claude(
             input_tokens=usage.get("input_tokens", 0),
             output_tokens=usage.get("output_tokens", 0),
             cache_read=usage.get("cache_read_input_tokens", 0),
