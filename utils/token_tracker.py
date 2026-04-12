@@ -87,6 +87,12 @@ class TokenTracker:
                 f"[tokens] TTFT: min={min(self.ttft_samples):.2f}s  "
                 f"mean={mean_ttft:.2f}s  max={max(self.ttft_samples):.2f}s"
             )
+        if self.generation_samples:
+            mean_gen = sum(self.generation_samples) / len(self.generation_samples)
+            lines.append(
+                f"[tokens] Gen time: min={min(self.generation_samples):.2f}s  "
+                f"mean={mean_gen:.2f}s  max={max(self.generation_samples):.2f}s"
+            )
         lines.append("[tokens] ────────────────────────────────────────────")
         return "\n".join(lines)
 
@@ -97,4 +103,12 @@ _tracker = TokenTracker()
 def get_tracker() -> TokenTracker:
     """Return the current active tracker. All callers use this instead of importing
     `tracker` directly so that benchmark resets (reassigning _tracker) take effect."""
+    return _tracker
+
+
+def reset_tracker() -> TokenTracker:
+    """Replace the active tracker with a fresh instance and return it.
+    Call this between benchmark runs to isolate measurements."""
+    global _tracker
+    _tracker = TokenTracker()
     return _tracker
