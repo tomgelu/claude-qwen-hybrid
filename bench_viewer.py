@@ -98,10 +98,29 @@ HTML = r"""<!DOCTYPE html>
         <tbody id="bench-body"></tbody>
       </table>
     </div>
+    <div style="display:flex;align-items:center;gap:.75rem;margin:.75rem 0 .5rem">
+      <button id="compare-btn" disabled onclick="runComparison()"
+        style="background:#1e1e2e;border:1px solid #2e2e3e;color:#e2e2e8;padding:.35rem .9rem;border-radius:6px;cursor:pointer;font-size:.8rem;opacity:.5"
+      >Compare selected</button>
+      <span id="compare-hint" style="font-size:.78rem;color:#6b7280">Select 2+ runs to compare</span>
+    </div>
+    <div id="bench-compare" style="display:none;margin-bottom:1.2rem">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.6rem">
+        <h2 style="font-size:.9rem;color:#6b7280;margin:0">Run Comparison</h2>
+        <button onclick="clearComparison()"
+          style="background:#1e1e2e;border:1px solid #2e2e3e;color:#9ca3af;padding:.25rem .7rem;border-radius:6px;cursor:pointer;font-size:.75rem"
+        >Clear</button>
+      </div>
+      <table id="compare-table" style="width:100%;border-collapse:collapse;font-size:.82rem">
+        <thead><tr id="compare-head"></tr></thead>
+        <tbody id="compare-body"></tbody>
+      </table>
+    </div>
     <div style="margin-top:1.5rem">
       <h2 style="font-size:.9rem;color:#6b7280;margin-bottom:.6rem">Run History</h2>
       <table>
         <thead><tr>
+          <th style="width:2rem"><input type="checkbox" id="check-all" onchange="toggleAllChecks(this)" title="Select all"></th>
           <th>Run ID</th><th>Task</th><th>A tests</th><th>B tests</th><th>C tests</th><th>RTK saving</th>
         </tr></thead>
         <tbody id="bench-history"></tbody>
@@ -118,6 +137,7 @@ HTML = r"""<!DOCTYPE html>
 </main>
 <script>
 let charts = [];
+let benchGroups = {};
 
 function fmt(n) { return n == null ? '—' : Number(n).toLocaleString(); }
 function fmtMs(s) { return s == null ? '—' : Math.round(s * 1000).toLocaleString() + ' ms'; }
@@ -129,6 +149,38 @@ function delta(a, b) {
   const sign = d < 0 ? '▼' : d > 0 ? '▲' : '';
   return `<span class="${cls}">${sign}${Math.abs(pct).toFixed(1)}%</span>`;
 }
+
+function qCell(val, base) {
+  const num = fmt(val);
+  if (!base || val === base) return num;
+  const d = val - base, pct = d / base * 100;
+  const cls = d < 0 ? 'delta-pos' : 'delta-neg';
+  return `${num} <span class="${cls}">${d < 0 ? '▼' : '▲'}${Math.abs(pct).toFixed(1)}%</span>`;
+}
+
+function qQual(val, base, higherIsBetter) {
+  const num = fmt(val);
+  if (!base || val === base) return num;
+  const d = val - base;
+  const improved = higherIsBetter ? d > 0 : d < 0;
+  const cls = improved ? 'delta-pos' : 'delta-neg';
+  return `${num} <span class="${cls}">${d > 0 ? '▲' : '▼'}${Math.abs(d)}</span>`;
+}
+
+const ROWS = [
+  ['Token Efficiency', null, null],
+  ['Qwen input tokens',    'qwen_in',         'token'],
+  ['Qwen output tokens',   'qwen_out',        'token'],
+  ['Tool resp bytes',      'tool_bytes',      'token'],
+  ['Claude input tokens',  'claude_in',       'token'],
+  ['Claude output tokens', 'claude_out',      'token'],
+  ['Output Quality', null, null],
+  ['Steps completed',      'steps_completed', 'qual-high'],
+  ['Tests passed',         'tests_passed',    'qual-high'],
+  ['Tests failed',         'tests_failed',    'qual-low'],
+  ['Run Info', null, null],
+  ['Wall time (s)',         'wall_time_s',     'token'],
+];
 
 async function load() {
   const res = await fetch('/data');
@@ -253,12 +305,12 @@ function renderRtk(rows) {
 
 function renderBenchRuns(rows) {
   // Group rows by run_id — each group is one A/B or A/B/C comparison set
-  const groups = {};
+  benchGroups = {};
   for (const r of rows) {
-    if (!groups[r.run_id]) groups[r.run_id] = [];
-    groups[r.run_id].push(r);
+    if (!benchGroups[r.run_id]) benchGroups[r.run_id] = [];
+    benchGroups[r.run_id].push(r);
   }
-  const sortedIds = Object.keys(groups).sort().reverse();
+  const sortedIds = Object.keys(benchGroups).sort().reverse();
 
   if (!sortedIds.length) {
     document.getElementById('bench-cards').innerHTML =
@@ -267,7 +319,7 @@ function renderBenchRuns(rows) {
   }
 
   // Summary cards from most recent group
-  const latest = groups[sortedIds[0]];
+  const latest = benchGroups[sortedIds[0]];
   const a = latest.find(r => r.label.startsWith('A')) || {};
   const b = latest.find(r => r.label.startsWith('B')) || {};
   const c = latest.find(r => r.label.startsWith('C'));
@@ -291,38 +343,6 @@ function renderBenchRuns(rows) {
   if (a.label) document.getElementById('bench-col-a').textContent = a.label;
   if (b.label) document.getElementById('bench-col-b').textContent = b.label;
   if (c)       document.getElementById('bench-col-c').textContent = c.label;
-
-  function qCell(val, base) {
-    const num = fmt(val);
-    if (!base || val === base) return num;
-    const d = val - base, pct = d / base * 100;
-    const cls = d < 0 ? 'delta-pos' : 'delta-neg';
-    return `${num} <span class="${cls}">${d < 0 ? '▼' : '▲'}${Math.abs(pct).toFixed(1)}%</span>`;
-  }
-
-  function qQual(val, base, higherIsBetter) {
-    const num = fmt(val);
-    if (!base || val === base) return num;
-    const d = val - base;
-    const improved = higherIsBetter ? d > 0 : d < 0;
-    const cls = improved ? 'delta-pos' : 'delta-neg';
-    return `${num} <span class="${cls}">${d > 0 ? '▲' : '▼'}${Math.abs(d)}</span>`;
-  }
-
-  const ROWS = [
-    ['Token Efficiency', null, null],
-    ['Qwen input tokens',    'qwen_in',         'token'],
-    ['Qwen output tokens',   'qwen_out',        'token'],
-    ['Tool resp bytes',      'tool_bytes',      'token'],
-    ['Claude input tokens',  'claude_in',       'token'],
-    ['Claude output tokens', 'claude_out',      'token'],
-    ['Output Quality', null, null],
-    ['Steps completed',      'steps_completed', 'qual-high'],
-    ['Tests passed',         'tests_passed',    'qual-high'],
-    ['Tests failed',         'tests_failed',    'qual-low'],
-    ['Run Info', null, null],
-    ['Wall time (s)',         'wall_time_s',     'token'],
-  ];
 
   const tbody = document.getElementById('bench-body');
   tbody.innerHTML = '';
@@ -373,7 +393,7 @@ function renderBenchRuns(rows) {
     const datasets = ['A', 'B', 'C'].map((letter, i) => ({
       label: letter,
       data: sortedIds.map(id => {
-        const run = groups[id].find(r => r.label.startsWith(letter));
+        const run = benchGroups[id].find(r => r.label.startsWith(letter));
         return run ? (run[def.key] || 0) : 0;
       }),
       backgroundColor: def.colors[i],
@@ -397,7 +417,7 @@ function renderBenchRuns(rows) {
   const histBody = document.getElementById('bench-history');
   histBody.innerHTML = '';
   for (const rid of sortedIds) {
-    const grp = groups[rid];
+    const grp = benchGroups[rid];
     const ra = grp.find(r => r.label.startsWith('A')) || {};
     const rb = grp.find(r => r.label.startsWith('B')) || {};
     const rc = grp.find(r => r.label.startsWith('C'));
@@ -411,6 +431,7 @@ function renderBenchRuns(rows) {
         : `<span class="delta-neg">${t.tests_passed}/${t.tests_passed + t.tests_failed} ✗</span>`;
     const tr = document.createElement('tr');
     tr.innerHTML = `
+      <td style="text-align:center"><input type="checkbox" class="run-check" data-run-id="${rid}" onchange="onRunCheckChange()"></td>
       <td class="run-label">${rid}</td>
       <td style="font-size:.75rem;color:#9ca3af">${taskSnip}</td>
       <td>${testCell(ra)}</td>
@@ -447,6 +468,91 @@ function renderChat(rows) {
     tbody.appendChild(tr);
   }
   if (!rows.length) tbody.innerHTML = '<tr><td colspan="9" class="empty">No chat prompt runs yet.</td></tr>';
+}
+
+function onRunCheckChange() {
+  const checked = [...document.querySelectorAll('.run-check:checked')];
+  const runIds = [...new Set(checked.map(c => c.dataset.runId))];
+  const btn = document.getElementById('compare-btn');
+  const hint = document.getElementById('compare-hint');
+  const enough = runIds.length >= 2;
+  btn.disabled = !enough;
+  btn.style.opacity = enough ? '1' : '.5';
+  btn.style.cursor = enough ? 'pointer' : 'default';
+  btn.textContent = enough ? `Compare ${runIds.length} runs` : 'Compare selected';
+  hint.textContent = enough ? '' : runIds.length === 1 ? 'Select 1 more run' : 'Select 2+ runs to compare';
+}
+
+function toggleAllChecks(masterCb) {
+  document.querySelectorAll('.run-check').forEach(cb => { cb.checked = masterCb.checked; });
+  onRunCheckChange();
+}
+
+function clearComparison() {
+  document.querySelectorAll('.run-check').forEach(cb => { cb.checked = false; });
+  const master = document.getElementById('check-all');
+  if (master) master.checked = false;
+  document.getElementById('compare-btn').disabled = true;
+  document.getElementById('compare-btn').style.opacity = '.5';
+  document.getElementById('compare-btn').textContent = 'Compare selected';
+  document.getElementById('compare-hint').textContent = 'Select 2+ runs to compare';
+  document.getElementById('bench-compare').style.display = 'none';
+}
+
+function runComparison() {
+  const checked = [...document.querySelectorAll('.run-check:checked')];
+  const runIds = [...new Set(checked.map(c => c.dataset.runId))];
+  if (runIds.length < 2) return;
+
+  const panel = document.getElementById('bench-compare');
+  panel.style.display = '';
+
+  const runData = runIds.map(rid => {
+    const grp = benchGroups[rid] || [];
+    return grp.find(r => r.label && r.label.startsWith('A')) || grp[0] || {};
+  });
+
+  const headRow = document.getElementById('compare-head');
+  headRow.innerHTML = '<th style="text-align:left;padding:.4rem .7rem;color:#6b7280;font-weight:500">Metric</th>' +
+    runIds.map((rid, i) => {
+      const rd = runData[i];
+      const task = (rd.task || '').slice(0, 40);
+      const isBase = i === 0 ? ' <span style="color:#a78bfa;font-size:.68rem">baseline</span>' : '';
+      return `<th style="text-align:right;padding:.4rem .7rem;color:#6b7280;font-weight:500">` +
+             `<span style="font-family:monospace;font-size:.75rem">${rid}</span>${isBase}<br>` +
+             `<span style="color:#4b5563;font-size:.68rem">${task}…</span></th>`;
+    }).join('');
+
+  const tbody = document.getElementById('compare-body');
+  tbody.innerHTML = '';
+  const baseline = runData[0];
+
+  for (const [label, key, type] of ROWS) {
+    if (!key) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td colspan="${runIds.length + 1}" style="background:#12121a;color:#6b7280;font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;padding:.3rem .7rem">${label}</td>`;
+      tbody.appendChild(tr);
+      continue;
+    }
+    const tr = document.createElement('tr');
+    const baseVal = baseline[key] ?? 0;
+    const cells = runData.map((rd, i) => {
+      const val = rd[key] ?? 0;
+      let cell;
+      if (i === 0) {
+        cell = fmt(val);
+      } else if (type === 'token') {
+        cell = qCell(val, baseVal);
+      } else if (type === 'qual-high') {
+        cell = qQual(val, baseVal, true);
+      } else {
+        cell = qQual(val, baseVal, false);
+      }
+      return `<td style="text-align:right;padding:.4rem .7rem;font-family:monospace;border-bottom:1px solid #12121a">${cell}</td>`;
+    }).join('');
+    tr.innerHTML = `<td style="padding:.4rem .7rem;border-bottom:1px solid #12121a">${label}</td>${cells}`;
+    tbody.appendChild(tr);
+  }
 }
 
 load();
