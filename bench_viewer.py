@@ -14,7 +14,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
-RESULTS_FILE = Path(__file__).parent / "benchmark_results.jsonl"
+DB_FILE = Path(__file__).parent / "benchmark_results.db"
 
 HTML = r"""<!DOCTYPE html>
 <html lang="en">
@@ -463,14 +463,21 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/data":
             rows = []
-            if RESULTS_FILE.exists():
-                for line in RESULTS_FILE.read_text().splitlines():
-                    line = line.strip()
-                    if line:
-                        try:
-                            rows.append(json.loads(line))
-                        except json.JSONDecodeError:
-                            pass
+            if DB_FILE.exists():
+                import sqlite3 as _sq
+                conn = None
+                try:
+                    conn = _sq.connect(str(DB_FILE))
+                    conn.row_factory = _sq.Row
+                    for r in conn.execute(
+                        "SELECT *, 'bench_run' AS model_type FROM bench_runs ORDER BY created_at"
+                    ):
+                        rows.append(dict(r))
+                except _sq.OperationalError:
+                    pass   # table doesn't exist yet
+                finally:
+                    if conn:
+                        conn.close()
             body = json.dumps(rows).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
