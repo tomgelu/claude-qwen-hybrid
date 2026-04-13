@@ -56,3 +56,10 @@ BENCHMARK_REPORT.md
 
 # Runtime plan state (written to workspace by orchestrator, cleaned up on success)
 .autogen_plan.json
+
+# SQLite databases
+benchmark_results.db
+tasks.db
+
+# Superpowers brainstorm scratch
+.superpowers/
