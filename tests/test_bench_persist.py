@@ -1,20 +1,19 @@
 """TDD tests for bench.py persistence — _write_bench_results and wall_time_s."""
-import json
 import os
+import sqlite3
 import tempfile
-import pytest
 
 
 def test_run_once_result_includes_wall_time_s():
-    """run_once() result dict must contain wall_time_s as a non-negative number."""
+    """_average_stats must include wall_time_s — documents run_once() contract."""
     from bench import _average_stats
     import inspect
     src = inspect.getsource(_average_stats)
     assert "wall_time_s" in src, "_average_stats must include wall_time_s in its keys list"
 
 
-def test_write_bench_results_creates_file_with_correct_schema():
-    """_write_bench_results appends one JSON line per stats dict to the given file."""
+def test_write_bench_results_creates_db_with_correct_schema():
+    """_write_bench_results inserts one row per stats dict into a SQLite DB."""
     from bench import _write_bench_results
 
     stats_list = [
@@ -34,38 +33,44 @@ def test_write_bench_results_creates_file_with_correct_schema():
         },
     ]
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
-        out_path = f.name
+    fd, db_path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    os.unlink(db_path)   # let _write_bench_results create it fresh
 
     try:
-        _write_bench_results("20260412_184301", "Build something", stats_list, out_path)
+        _write_bench_results("20260412_184301", "Build something", stats_list, db_path)
 
-        lines = open(out_path).read().splitlines()
-        assert len(lines) == 2, f"Expected 2 lines, got {len(lines)}"
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute("SELECT * FROM bench_runs ORDER BY id").fetchall()
+        finally:
+            conn.close()
 
-        rec_a = json.loads(lines[0])
-        assert rec_a["model_type"] == "bench_run"
+        assert len(rows) == 2, f"Expected 2 rows, got {len(rows)}"
+
+        rec_a = dict(rows[0])
         assert rec_a["run_id"] == "20260412_184301"
         assert rec_a["task"] == "Build something"
         assert rec_a["label"] == "A (no RTK)"
-        assert rec_a["use_rtk"] is False
-        assert rec_a["phases_enabled"] is False
+        assert rec_a["use_rtk"] == 0        # stored as int
+        assert rec_a["phases_enabled"] == 0
         assert rec_a["qwen_in"] == 1000
         assert rec_a["tests_passed"] == 6
         assert rec_a["wall_time_s"] == 42
 
-        rec_b = json.loads(lines[1])
+        rec_b = dict(rows[1])
         assert rec_b["label"] == "B (RTK)"
-        assert rec_b["use_rtk"] is True
+        assert rec_b["use_rtk"] == 1
     finally:
-        os.unlink(out_path)
+        if os.path.exists(db_path):
+            os.unlink(db_path)
 
 
-def test_write_bench_results_appends_to_existing_file():
-    """_write_bench_results appends — does not overwrite existing content."""
+def test_write_bench_results_accumulates_across_calls():
+    """Calling _write_bench_results twice appends rows — does not overwrite."""
     from bench import _write_bench_results
 
-    existing = {"existing": True}
     stats = [{
         "label": "A", "use_rtk": False, "phases_enabled": False,
         "qwen_in": 0, "qwen_out": 0, "tool_bytes": 0,
@@ -74,15 +79,23 @@ def test_write_bench_results_appends_to_existing_file():
         "tests_passed": 0, "tests_failed": 0,
     }]
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
-        f.write(json.dumps(existing) + "\n")
-        out_path = f.name
+    fd, db_path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    os.unlink(db_path)
 
     try:
-        _write_bench_results("run2", "task", stats, out_path)
-        lines = open(out_path).read().splitlines()
-        assert len(lines) == 2
-        assert json.loads(lines[0]) == existing   # original line preserved
-        assert json.loads(lines[1])["run_id"] == "run2"
+        _write_bench_results("run1", "task one", stats, db_path)
+        _write_bench_results("run2", "task two", stats, db_path)
+
+        conn = sqlite3.connect(db_path)
+        try:
+            rows = conn.execute("SELECT run_id FROM bench_runs ORDER BY id").fetchall()
+        finally:
+            conn.close()
+
+        assert len(rows) == 2, f"Expected 2 rows, got {len(rows)}"
+        assert rows[0][0] == "run1", f"Expected 'run1', got {rows[0][0]!r}"
+        assert rows[1][0] == "run2", f"Expected 'run2', got {rows[1][0]!r}"
     finally:
-        os.unlink(out_path)
+        if os.path.exists(db_path):
+            os.unlink(db_path)
