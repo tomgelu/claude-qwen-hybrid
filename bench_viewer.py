@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-bench_viewer.py — local HTTP dashboard for benchmark_results.jsonl
+bench_viewer.py — local HTTP dashboard for benchmark_results.db
 
 Usage:
     python3 bench_viewer.py          # serves on http://localhost:8080
@@ -138,6 +138,10 @@ HTML = r"""<!DOCTYPE html>
 <script>
 let charts = [];
 let benchGroups = {};
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
 
 function fmt(n) { return n == null ? '—' : Number(n).toLocaleString(); }
 function fmtMs(s) { return s == null ? '—' : Math.round(s * 1000).toLocaleString() + ' ms'; }
@@ -424,14 +428,15 @@ function renderBenchRuns(rows) {
     const saving = ra.qwen_in && rb.qwen_in
       ? '<span class="delta-pos">▼' + Math.round((ra.qwen_in - rb.qwen_in) / ra.qwen_in * 100) + '%</span>'
       : '—';
-    const taskSnip = (ra.task || rb.task || '').slice(0, 50) + '…';
+    const raw = ra.task || rb.task || '';
+    const taskSnip = raw.length > 50 ? raw.slice(0, 50) + '…' : raw;
     const testCell = (t) => t == null ? '—'
       : t.tests_failed === 0
         ? `<span class="delta-pos">${t.tests_passed}/${t.tests_passed + t.tests_failed} ✓</span>`
         : `<span class="delta-neg">${t.tests_passed}/${t.tests_passed + t.tests_failed} ✗</span>`;
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td style="text-align:center"><input type="checkbox" class="run-check" data-run-id="${rid}" onchange="onRunCheckChange()"></td>
+      <td style="text-align:center"><input type="checkbox" class="run-check" data-run-id="${esc(rid)}" onchange="onRunCheckChange()"></td>
       <td class="run-label">${rid}</td>
       <td style="font-size:.75rem;color:#9ca3af">${taskSnip}</td>
       <td>${testCell(ra)}</td>
@@ -494,6 +499,7 @@ function clearComparison() {
   if (master) master.checked = false;
   document.getElementById('compare-btn').disabled = true;
   document.getElementById('compare-btn').style.opacity = '.5';
+  document.getElementById('compare-btn').style.cursor = 'default';
   document.getElementById('compare-btn').textContent = 'Compare selected';
   document.getElementById('compare-hint').textContent = 'Select 2+ runs to compare';
   document.getElementById('bench-compare').style.display = 'none';
@@ -503,6 +509,7 @@ function runComparison() {
   const checked = [...document.querySelectorAll('.run-check:checked')];
   const runIds = [...new Set(checked.map(c => c.dataset.runId))];
   if (runIds.length < 2) return;
+  if (Object.keys(benchGroups).length === 0) return;
 
   const panel = document.getElementById('bench-compare');
   panel.style.display = '';
@@ -519,8 +526,8 @@ function runComparison() {
       const task = (rd.task || '').slice(0, 40);
       const isBase = i === 0 ? ' <span style="color:#a78bfa;font-size:.68rem">baseline</span>' : '';
       return `<th style="text-align:right;padding:.4rem .7rem;color:#6b7280;font-weight:500">` +
-             `<span style="font-family:monospace;font-size:.75rem">${rid}</span>${isBase}<br>` +
-             `<span style="color:#4b5563;font-size:.68rem">${task}…</span></th>`;
+             `<span style="font-family:monospace;font-size:.75rem">${esc(rid)}</span>${isBase}<br>` +
+             `<span style="color:#4b5563;font-size:.68rem">${esc(task)}</span></th>`;
     }).join('');
 
   const tbody = document.getElementById('compare-body');
