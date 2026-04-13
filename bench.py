@@ -81,7 +81,44 @@ def capture_quality(workspace: str, state: dict) -> dict:
     }
 
 
-_RESULTS_FILE = Path(__file__).parent / "benchmark_results.jsonl"
+_DB_FILE    = Path(__file__).parent / "benchmark_results.db"
+_JSONL_FILE = Path(__file__).parent / "benchmark_results.jsonl"
+
+_CREATE_TABLE = """
+CREATE TABLE IF NOT EXISTS bench_runs (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id          TEXT    NOT NULL,
+    task            TEXT    NOT NULL DEFAULT '',
+    label           TEXT    NOT NULL DEFAULT '',
+    use_rtk         INTEGER NOT NULL DEFAULT 0,
+    phases_enabled  INTEGER NOT NULL DEFAULT 0,
+    qwen_in         INTEGER NOT NULL DEFAULT 0,
+    qwen_out        INTEGER NOT NULL DEFAULT 0,
+    tool_bytes      INTEGER NOT NULL DEFAULT 0,
+    claude_in       INTEGER NOT NULL DEFAULT 0,
+    claude_out      INTEGER NOT NULL DEFAULT 0,
+    steps_completed INTEGER NOT NULL DEFAULT 0,
+    steps_failed    INTEGER NOT NULL DEFAULT 0,
+    steps_total     INTEGER NOT NULL DEFAULT 0,
+    tests_passed    INTEGER NOT NULL DEFAULT 0,
+    tests_failed    INTEGER NOT NULL DEFAULT 0,
+    wall_time_s     INTEGER NOT NULL DEFAULT 0,
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+)
+"""
+
+_INSERT_ROW = """
+INSERT INTO bench_runs
+    (run_id, task, label, use_rtk, phases_enabled,
+     qwen_in, qwen_out, tool_bytes, claude_in, claude_out,
+     steps_completed, steps_failed, steps_total,
+     tests_passed, tests_failed, wall_time_s)
+VALUES
+    (:run_id, :task, :label, :use_rtk, :phases_enabled,
+     :qwen_in, :qwen_out, :tool_bytes, :claude_in, :claude_out,
+     :steps_completed, :steps_failed, :steps_total,
+     :tests_passed, :tests_failed, :wall_time_s)
+"""
 
 
 def _write_bench_results(
@@ -91,23 +128,29 @@ def _write_bench_results(
     out_path=None,
 ) -> None:
     """
-    Append one JSON record per run to benchmark_results.jsonl.
+    Insert one row per run into benchmark_results.db.
 
-    Each record carries model_type="bench_run" so bench_viewer.py can
-    filter it from chat/pipeline rows.
-
-    out_path: override the default file path (used in tests).
+    out_path: override the default DB path (used in tests — pass a temp .db path).
+    If benchmark_results.jsonl exists alongside the DB, its records are migrated
+    into the DB and the file is deleted.
     """
-    path = Path(out_path) if out_path else _RESULTS_FILE
-    with open(path, "a") as f:
+    import sqlite3 as _sqlite3
+    db_path = Path(out_path) if out_path else _DB_FILE
+    conn = _sqlite3.connect(str(db_path))
+    try:
+        conn.execute(_CREATE_TABLE)
+
+        # One-time JSONL migration (only runs when using the real DB, not test overrides)
+        if out_path is None and _JSONL_FILE.exists():
+            _migrate_jsonl(conn)
+
         for stats in stats_list:
-            record = {
+            conn.execute(_INSERT_ROW, {
                 "run_id":          run_id,
-                "model_type":      "bench_run",
                 "task":            task,
                 "label":           stats.get("label", ""),
-                "use_rtk":         stats.get("use_rtk", False),
-                "phases_enabled":  stats.get("phases_enabled", False),
+                "use_rtk":         int(bool(stats.get("use_rtk", False))),
+                "phases_enabled":  int(bool(stats.get("phases_enabled", False))),
                 "qwen_in":         stats.get("qwen_in", 0),
                 "qwen_out":        stats.get("qwen_out", 0),
                 "tool_bytes":      stats.get("tool_bytes", 0),
@@ -119,8 +162,47 @@ def _write_bench_results(
                 "tests_passed":    stats.get("tests_passed", 0),
                 "tests_failed":    stats.get("tests_failed", 0),
                 "wall_time_s":     stats.get("wall_time_s", 0),
-            }
-            f.write(json.dumps(record) + "\n")
+            })
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _migrate_jsonl(conn) -> None:
+    """Import records from benchmark_results.jsonl into the open DB connection, then delete the file."""
+    migrated = 0
+    for line in _JSONL_FILE.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if rec.get("model_type") != "bench_run":
+            continue
+        conn.execute(_INSERT_ROW, {
+            "run_id":          rec.get("run_id", ""),
+            "task":            rec.get("task", ""),
+            "label":           rec.get("label", ""),
+            "use_rtk":         int(bool(rec.get("use_rtk", False))),
+            "phases_enabled":  int(bool(rec.get("phases_enabled", False))),
+            "qwen_in":         rec.get("qwen_in", 0),
+            "qwen_out":        rec.get("qwen_out", 0),
+            "tool_bytes":      rec.get("tool_bytes", 0),
+            "claude_in":       rec.get("claude_in", 0),
+            "claude_out":      rec.get("claude_out", 0),
+            "steps_completed": rec.get("steps_completed", 0),
+            "steps_failed":    rec.get("steps_failed", 0),
+            "steps_total":     rec.get("steps_total", 0),
+            "tests_passed":    rec.get("tests_passed", 0),
+            "tests_failed":    rec.get("tests_failed", 0),
+            "wall_time_s":     rec.get("wall_time_s", 0),
+        })
+        migrated += 1
+    conn.commit()
+    _JSONL_FILE.unlink()
+    print(f"  [bench] Migrated {migrated} records from JSONL → SQLite", flush=True)
 
 
 def _fresh_modules():
@@ -362,9 +444,18 @@ def main():
     print("\n")
     print(format_results_table(runs, task))
 
-    # Persist results to benchmark_results.jsonl for bench_viewer.py
+    # Persist averaged stats to benchmark_results.jsonl for bench_viewer.py.
+    # Always write the averaged values so the viewer's label-based grouping
+    # ("A …", "B …", "C …") works correctly regardless of --runs N.
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-    _write_bench_results(run_id, task, all_a + all_b + all_c)
+    avg_sfx_label = f" avg×{args.runs}" if args.runs > 1 else ""
+    persist_stats = [
+        {**avg_a, "label": f"A (no RTK){avg_sfx_label}"},
+        {**avg_b, "label": f"B (RTK){avg_sfx_label}"},
+    ]
+    if all_c:
+        persist_stats.append({**avg_c, "label": f"C (RTK+phases){avg_sfx_label}"})
+    _write_bench_results(run_id, task, persist_stats)
     print(f"\n  Results saved → benchmark_results.jsonl  (run_id={run_id})")
 
 
