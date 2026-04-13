@@ -20,6 +20,7 @@ import argparse
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import shutil
@@ -134,10 +135,10 @@ def _write_bench_results(
     If benchmark_results.jsonl exists alongside the DB, its records are migrated
     into the DB and the file is deleted.
     """
-    import sqlite3 as _sqlite3
     db_path = Path(out_path) if out_path else _DB_FILE
-    conn = _sqlite3.connect(str(db_path))
+    conn = None
     try:
+        conn = sqlite3.connect(str(db_path))
         conn.execute(_CREATE_TABLE)
 
         # One-time JSONL migration (only runs when using the real DB, not test overrides)
@@ -165,7 +166,8 @@ def _write_bench_results(
             })
         conn.commit()
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 
 def _migrate_jsonl(conn) -> None:
@@ -444,7 +446,7 @@ def main():
     print("\n")
     print(format_results_table(runs, task))
 
-    # Persist averaged stats to benchmark_results.jsonl for bench_viewer.py.
+    # Persist averaged stats to benchmark_results.db for bench_viewer.py.
     # Always write the averaged values so the viewer's label-based grouping
     # ("A …", "B …", "C …") works correctly regardless of --runs N.
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -456,7 +458,7 @@ def main():
     if all_c:
         persist_stats.append({**avg_c, "label": f"C (RTK+phases){avg_sfx_label}"})
     _write_bench_results(run_id, task, persist_stats)
-    print(f"\n  Results saved → benchmark_results.jsonl  (run_id={run_id})")
+    print(f"\n  Results saved → benchmark_results.db  (run_id={run_id})")
 
 
 if __name__ == "__main__":
