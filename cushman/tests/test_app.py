@@ -66,6 +66,21 @@ def test_get_assessments_returns_saved(client):
     assert data[0]['total'] == 10
 
 
+def test_delete_assessment_found(client):
+    r = client.post('/api/assessments', json={
+        'scores': [1]*10, 'total': 10, 'severity': 'modere',
+    })
+    assessment_id = json.loads(r.data)['id']
+    r = client.delete(f'/api/assessments/{assessment_id}')
+    assert r.status_code == 200
+    assert json.loads(r.data) == {'deleted': True}
+
+
+def test_delete_assessment_not_found(client):
+    r = client.delete('/api/assessments/9999')
+    assert r.status_code == 404
+
+
 def test_get_assessment_by_id_found(client):
     # Save an assessment
     payload = {

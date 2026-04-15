@@ -42,6 +42,14 @@ def list_assessments():
     return jsonify(rows), 200
 
 
+@app.delete('/api/assessments/<int:id>')
+def delete_assessment(id):
+    deleted = db.delete_assessment(id)
+    if not deleted:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify({'deleted': True}), 200
+
+
 @app.get('/api/assessments/<int:id>')
 def get_assessment_by_id(id):
     assessment = db.get_assessment_by_id(id)

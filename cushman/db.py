@@ -49,6 +49,15 @@ def get_assessments(limit: int = 50) -> list:
     return rows
 
 
+def delete_assessment(id: int) -> bool:
+    con = _connect()
+    cur = con.execute("DELETE FROM assessments WHERE id = ?", (id,))
+    con.commit()
+    deleted = cur.rowcount > 0
+    con.close()
+    return deleted
+
+
 def get_assessment_by_id(id: int) -> dict | None:
     con = _connect()
     cur = con.execute(
