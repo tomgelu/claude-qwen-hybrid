@@ -42,5 +42,13 @@ def list_assessments():
     return jsonify(rows), 200
 
 
+@app.delete('/api/assessments/<int:id>')
+def delete_assessment(id: int):
+    deleted = db.delete_assessment(id)
+    if deleted:
+        return jsonify({'deleted': True}), 200
+    return jsonify({'error': 'not found'}), 404
+
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)

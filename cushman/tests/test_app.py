@@ -64,3 +64,20 @@ def test_get_assessments_returns_saved(client):
     data = json.loads(r.data)
     assert len(data) == 1
     assert data[0]['total'] == 10
+
+
+def test_delete_assessment_found(client):
+    r = client.post('/api/assessments', json={
+        'scores': [1]*10,
+        'total': 10,
+        'severity': 'modere',
+    })
+    row_id = json.loads(r.data)['id']
+    r = client.delete(f'/api/assessments/{row_id}')
+    assert r.status_code == 200
+    assert json.loads(r.data) == {'deleted': True}
+
+
+def test_delete_assessment_not_found(client):
+    r = client.delete('/api/assessments/9999')
+    assert r.status_code == 404
