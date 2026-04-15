@@ -1,0 +1,148 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  background: #f5f6fa;
+  color: #222;
+  min-height: 100vh;
+}
+
+header {
+  background: #1a73e8;
+  color: white;
+  padding: 1rem 1.5rem;
+}
+header h1 { font-size: 1.4rem; font-weight: 700; }
+.subtitle { font-size: 1rem; font-weight: 400; opacity: 0.85; }
+
+main {
+  max-width: 700px;
+  margin: 1.5rem auto;
+  padding: 0 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+/* Error banner */
+.error-banner {
+  background: #fdecea;
+  color: #b71c1c;
+  border: 1px solid #f5c6cb;
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  font-size: 0.95rem;
+}
+.hidden { display: none !important; }
+
+/* Criteria */
+#criteria-list { display: flex; flex-direction: column; gap: 0.75rem; }
+
+.criterion-row {
+  background: white;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+.criterion-label {
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+  color: #444;
+}
+.btn-group { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+
+.score-btn {
+  min-width: 2.4rem;
+  height: 2.4rem;
+  border: 2px solid #d0d5dd;
+  border-radius: 6px;
+  background: white;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  color: #444;
+}
+.score-btn:hover { border-color: #1a73e8; color: #1a73e8; }
+.score-btn.selected {
+  background: #1a73e8;
+  border-color: #1a73e8;
+  color: white;
+}
+
+/* Score summary */
+#score-summary {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  background: white;
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+.score-label { font-size: 1rem; color: #666; }
+.score-value { font-size: 2rem; font-weight: 700; min-width: 2.5rem; }
+
+/* Severity badges */
+.badge {
+  padding: 0.35rem 0.8rem;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-left: auto;
+}
+.badge-leger   { background: #e6f4ea; color: #2e7d32; }
+.badge-modere  { background: #fff3e0; color: #e65100; }
+.badge-severe  { background: #fdecea; color: #b71c1c; }
+
+/* Buttons */
+.btn-primary {
+  width: 100%;
+  padding: 0.9rem;
+  background: #1a73e8;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 1.05rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.btn-primary:hover { background: #1558b0; }
+
+.btn-secondary {
+  width: 100%;
+  padding: 0.75rem;
+  background: white;
+  color: #444;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+.btn-secondary:hover { background: #f0f4ff; }
+
+/* History */
+#history-section { display: flex; flex-direction: column; gap: 0.75rem; }
+#history-panel {
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  overflow: hidden;
+}
+#history-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+#history-table th, #history-table td {
+  padding: 0.65rem 1rem;
+  text-align: left;
+  border-bottom: 1px solid #f0f0f0;
+}
+#history-table th { background: #f8f9fb; font-weight: 700; color: #555; }
+#history-empty { padding: 1rem; color: #888; font-size: 0.9rem; }
+
+@media (max-width: 480px) {
+  .score-btn { min-width: 2.1rem; height: 2.1rem; font-size: 0.85rem; }
+  .score-value { font-size: 1.6rem; }
+}

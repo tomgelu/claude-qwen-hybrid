@@ -1,12 +1,57 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="fr">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cushman Assessment</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Score de Cushman</title>
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <h1>Cushman Assessment</h1>
-    <p>Welcome to the Cushman Assessment tool.</p>
+  <header>
+    <h1>Score de Cushman <span class="subtitle">(CIWA-Ar)</span></h1>
+  </header>
+
+  <main>
+    <div id="error-banner" class="error-banner hidden">
+      Erreur de connexion — score non enregistré
+    </div>
+
+    <section id="calculator">
+      <div id="criteria-list">
+        <!-- Populated by app.js -->
+      </div>
+
+      <div id="score-summary">
+        <span class="score-label">Total :</span>
+        <span id="total-display" class="score-value">0</span>
+        <span id="severity-badge" class="badge badge-leger">Sevrage léger</span>
+      </div>
+
+      <button id="save-btn" class="btn-primary">Enregistrer</button>
+    </section>
+
+    <section id="history-section">
+      <button id="history-toggle" class="btn-secondary">
+        Afficher l'historique <span id="toggle-arrow">&#9660;</span>
+      </button>
+      <div id="history-panel" class="hidden">
+        <table id="history-table">
+          <thead>
+            <tr>
+              <th>Date / Heure</th>
+              <th>Total</th>
+              <th>Sévérité</th>
+            </tr>
+          </thead>
+          <tbody id="history-body">
+            <!-- Populated by app.js -->
+          </tbody>
+        </table>
+        <p id="history-empty" class="hidden">Aucune évaluation enregistrée</p>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
 </body>
 </html>
