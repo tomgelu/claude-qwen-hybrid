@@ -346,7 +346,7 @@ def run_once(label: str, use_rtk: bool, workspace: str, plan: dict,
     print(f"  RUN {label}  |  USE_RTK={use_rtk}{phases_tag}  |  workspace={workspace}")
     print(f"{'='*60}", flush=True)
 
-    RUN_TIMEOUT = 480
+    RUN_TIMEOUT = 900
     exc_holder   = []
     state_holder = []
 
