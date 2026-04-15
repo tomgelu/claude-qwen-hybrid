@@ -11,7 +11,7 @@ services:
       --host 0.0.0.0
       --gpu-memory-utilization ${GPU_MEMORY_UTIL:-0.90}
       --max-model-len ${MAX_MODEL_LEN:-32768}
-      ${VLLM_EXTRA_ARGS:---trust-remote-code --enforce-eager --enable-auto-tool-choice --tool-call-parser hermes}
+      ${VLLM_EXTRA_ARGS:---trust-remote-code --enforce-eager --enable-auto-tool-choice --tool-call-parser hermes --enable-prefix-caching}
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
