@@ -49,10 +49,16 @@ def get_assessments(limit: int = 50) -> list:
     return rows
 
 
-def delete_assessment(id: int) -> bool:
+def get_assessment_by_id(id: int) -> dict | None:
     con = _connect()
-    cur = con.execute("DELETE FROM assessments WHERE id = ?", (id,))
-    con.commit()
-    deleted = cur.rowcount > 0
+    cur = con.execute(
+        "SELECT id, timestamp, scores, total, severity FROM assessments WHERE id = ?",
+        (id,),
+    )
+    row = cur.fetchone()
     con.close()
-    return deleted
+    if row is None:
+        return None
+    row_dict = dict(row)
+    row_dict['scores'] = json.loads(row_dict['scores'])
+    return row_dict

@@ -66,18 +66,30 @@ def test_get_assessments_returns_saved(client):
     assert data[0]['total'] == 10
 
 
-def test_delete_assessment_found(client):
-    r = client.post('/api/assessments', json={
-        'scores': [1]*10,
-        'total': 10,
-        'severity': 'modere',
-    })
-    row_id = json.loads(r.data)['id']
-    r = client.delete(f'/api/assessments/{row_id}')
+def test_get_assessment_by_id_found(client):
+    # Save an assessment
+    payload = {
+        'scores': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+        'total': 55,
+        'severity': 'high',
+    }
+    r = client.post('/api/assessments', json=payload)
+    assert r.status_code == 201
+    data = json.loads(r.data)
+    assessment_id = data['id']
+
+    # Fetch it by ID
+    r = client.get(f'/api/assessments/{assessment_id}')
     assert r.status_code == 200
-    assert json.loads(r.data) == {'deleted': True}
+    assessment = json.loads(r.data)
+    assert assessment['id'] == assessment_id
+    assert assessment['total'] == 55
+    assert assessment['severity'] == 'high'
+    assert assessment['scores'] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
 
-def test_delete_assessment_not_found(client):
-    r = client.delete('/api/assessments/9999')
+def test_get_assessment_by_id_not_found(client):
+    r = client.get('/api/assessments/9999')
     assert r.status_code == 404
+    data = json.loads(r.data)
+    assert data['error'] == 'not found'
