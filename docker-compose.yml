@@ -48,5 +48,16 @@ services:
     working_dir: /app
     restart: unless-stopped
 
+  cushman:
+    build:
+      context: .
+      dockerfile: cushman/Dockerfile
+    ports:
+      - '5000:5000'
+    volumes:
+      - .:/app
+    working_dir: /app
+    restart: unless-stopped
+
 volumes:
   huggingface_cache:
