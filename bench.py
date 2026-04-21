@@ -216,6 +216,8 @@ def _migrate_jsonl(conn) -> None:
             "tests_passed":    rec.get("tests_passed", 0),
             "tests_failed":    rec.get("tests_failed", 0),
             "wall_time_s":     rec.get("wall_time_s", 0),
+            "model_label":     rec.get("model_label", ""),
+            "compare_id":      rec.get("compare_id", ""),
         })
         migrated += 1
     conn.commit()
