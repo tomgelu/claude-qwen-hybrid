@@ -47,9 +47,9 @@ MODEL_CONFIGS = [
 
 
 def stop_servers() -> None:
-    """Stop all running vLLM containers (both compose and standalone)."""
+    """Stop and remove all running vLLM containers (both compose and standalone)."""
     print("  [compare] Stopping vLLM servers...", flush=True)
-    subprocess.run(["docker", "stop", "vllm-server"], capture_output=True)
+    subprocess.run(["docker", "rm", "-f", "vllm-server"], capture_output=True)
     subprocess.run(
         ["docker", "compose", "down", "vllm"],
         capture_output=True, cwd=str(HERE),
@@ -62,7 +62,7 @@ def start_35b(cfg: dict) -> None:
     env = {
         **os.environ,
         "VLLM_MODEL":      cfg["model_name"],
-        "VLLM_EXTRA_ARGS": cfg["vllm_extra_args"],
+        "VLLM_EXTRA_ARGS": cfg.get("vllm_extra_args", ""),
     }
     subprocess.run(
         ["docker", "compose", "up", "-d", "vllm"],
@@ -169,15 +169,21 @@ def main() -> None:
 
         if cfg["start_mode"] == "compose":
             start_35b(cfg)
-        else:
+        elif cfg["start_mode"] == "docker_run":
             start_80b(cfg)
+        else:
+            raise ValueError(f"Unknown start_mode: {cfg['start_mode']!r}")
 
-        wait_for_health(cfg["health_timeout"], tag)
-
-        os.environ["LOCAL_MODEL_NAME"] = cfg["local_model_name"]
-        os.environ["LOCAL_MODEL_URL"]  = "http://127.0.0.1:8000/v1/chat/completions"
-
-        run_bench(task, tag, compare_id)
+        try:
+            wait_for_health(cfg["health_timeout"], tag)
+            os.environ["LOCAL_MODEL_NAME"] = cfg["local_model_name"]
+            os.environ["LOCAL_MODEL_URL"]  = "http://127.0.0.1:8000/v1/chat/completions"
+            run_bench(task, tag, compare_id)
+        except Exception as exc:
+            print(f"\n  [compare] ERROR during {tag} run: {exc}", flush=True)
+            print(f"  [compare] Partial results may exist under compare_id={compare_id}", flush=True)
+            stop_servers()
+            raise
 
     stop_servers()
     print(f"\n{'='*60}")
