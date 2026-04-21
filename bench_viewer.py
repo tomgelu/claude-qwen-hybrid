@@ -61,6 +61,13 @@ HTML = r"""<!DOCTYPE html>
 
   .run-label { font-size: .72rem; color: #6b7280; font-family: monospace; }
   .empty { color: #4b5563; font-size: .85rem; padding: 1rem 0; }
+
+  #summary-banner { margin-bottom: 1.5rem; border-radius: 8px; padding: 1rem 1.4rem; border: 1px solid; }
+  #summary-banner.good { background: #0d2318; border-color: #166534; }
+  #summary-banner.bad  { background: #1f0d0d; border-color: #7f1d1d; }
+  #summary-banner.neu  { background: #16161f; border-color: #1e1e2e; }
+  .summary-verdict { font-size: 1.05rem; font-weight: 600; margin-bottom: .4rem; }
+  .summary-detail  { font-size: .82rem; color: #9ca3af; line-height: 1.6; }
 </style>
 </head>
 <body>
@@ -71,6 +78,16 @@ HTML = r"""<!DOCTYPE html>
   <button onclick="load()" style="background:#1e1e2e;border:1px solid #2e2e3e;color:#e2e2e8;padding:.35rem .8rem;border-radius:6px;cursor:pointer;font-size:.8rem;">Refresh</button>
 </header>
 <main>
+  <div id="summary-banner" class="neu" style="display:none"></div>
+  <section id="model-cmp-section" style="display:none;margin-bottom:1.5rem">
+    <h2>Model Comparison</h2>
+    <div id="model-cmp-selector" style="margin-bottom:.75rem;font-size:.8rem;color:#6b7280"></div>
+    <table id="model-cmp-table" style="width:100%;border-collapse:collapse;font-size:.82rem">
+      <thead><tr id="model-cmp-head"></tr></thead>
+      <tbody id="model-cmp-body"></tbody>
+    </table>
+    <div id="model-cmp-verdict" style="margin-top:1rem"></div>
+  </section>
   <div class="cards" id="cards"></div>
   <section id="rtk-section">
     <h2>RTK Pipeline Comparison</h2>
@@ -186,6 +203,182 @@ const ROWS = [
   ['Wall time (s)',         'wall_time_s',     'token'],
 ];
 
+function renderModelComparison(benchRuns) {
+  const section = document.getElementById('model-cmp-section');
+  // Group by compare_id — skip empty compare_ids
+  const groups = {};
+  for (const r of benchRuns) {
+    if (!r.compare_id) continue;
+    if (!groups[r.compare_id]) groups[r.compare_id] = [];
+    groups[r.compare_id].push(r);
+  }
+  const cmpIds = Object.keys(groups).sort().reverse();
+  if (!cmpIds.length) { section.style.display = 'none'; return; }
+  section.style.display = '';
+
+  // Use most recent comparison
+  const latest = groups[cmpIds[0]];
+
+  // Build selector if multiple comparisons exist
+  const sel = document.getElementById('model-cmp-selector');
+  if (cmpIds.length > 1) {
+    sel.innerHTML = 'Comparison: ' + cmpIds.map((id, i) =>
+      `<span style="cursor:pointer;color:${i===0?'#a78bfa':'#6b7280'};margin-right:.5rem"
+        onclick="showComparison('${esc(id)}')">${esc(id)}</span>`
+    ).join('');
+  } else {
+    sel.innerHTML = `<span style="font-family:monospace">${esc(cmpIds[0])}</span>`;
+  }
+
+  // Find the 4 runs: 35b no-rtk, 35b rtk, 80b no-rtk, 80b rtk
+  const find = (tag, rtk) => latest.find(r =>
+    r.model_label === tag && (rtk ? r.use_rtk : !r.use_rtk)
+  ) || {};
+
+  const cols = [
+    { label: '35B  no RTK', run: find('35b', false) },
+    { label: '35B  RTK',    run: find('35b', true)  },
+    { label: '80B  no RTK', run: find('80b', false) },
+    { label: '80B  RTK',    run: find('80b', true)  },
+  ].filter(c => Object.keys(c.run).length);
+
+  if (!cols.length) { section.style.display = 'none'; return; }
+
+  // Header
+  const headRow = document.getElementById('model-cmp-head');
+  headRow.innerHTML =
+    '<th style="text-align:left;padding:.4rem .7rem;color:#6b7280;font-weight:500">Metric</th>' +
+    cols.map(c =>
+      `<th style="text-align:right;padding:.4rem .7rem;color:#6b7280;font-weight:500">${esc(c.label)}</th>`
+    ).join('');
+
+  // Body — use same ROWS definition as the rest of the viewer
+  const tbody = document.getElementById('model-cmp-body');
+  tbody.innerHTML = '';
+  const baseRun = cols[0].run;
+  for (const [label, key, type] of ROWS) {
+    if (!key) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td colspan="${cols.length + 1}"
+        style="background:#12121a;color:#6b7280;font-size:.72rem;text-transform:uppercase;
+               letter-spacing:.05em;padding:.3rem .7rem">${label}</td>`;
+      tbody.appendChild(tr);
+      continue;
+    }
+    const tr = document.createElement('tr');
+    const cells = cols.map((c, i) => {
+      const val     = c.run[key] ?? 0;
+      const baseVal = baseRun[key] ?? 0;
+      let cell;
+      if (i === 0) {
+        cell = fmt(val);
+      } else if (type === 'token') {
+        cell = qCell(val, baseVal);
+      } else if (type === 'qual-high') {
+        cell = qQual(val, baseVal, true);
+      } else {
+        cell = qQual(val, baseVal, false);
+      }
+      return `<td style="text-align:right;padding:.4rem .7rem;font-family:monospace;
+                border-bottom:1px solid #12121a">${cell}</td>`;
+    }).join('');
+    tr.innerHTML = `<td style="padding:.4rem .7rem;border-bottom:1px solid #12121a">${label}</td>${cells}`;
+    tbody.appendChild(tr);
+  }
+
+  // Verdict
+  renderModelVerdict(cols, document.getElementById('model-cmp-verdict'));
+}
+
+function renderModelVerdict(cols, el) {
+  // Pick best model per dimension (lower tokens/time = better; higher tests = better)
+  const dimensions = [
+    { name: 'Token efficiency', key: 'qwen_in',      lowerBetter: true  },
+    { name: 'Speed',            key: 'wall_time_s',  lowerBetter: true  },
+    { name: 'Quality',          key: 'tests_passed', lowerBetter: false },
+  ];
+
+  const lines = dimensions.map(dim => {
+    const vals = cols.map(c => ({ label: c.label, val: c.run[dim.key] ?? 0 }));
+    const best = vals.reduce((a, b) =>
+      dim.lowerBetter ? (a.val <= b.val ? a : b) : (a.val >= b.val ? a : b)
+    );
+    const worst = vals.reduce((a, b) =>
+      dim.lowerBetter ? (a.val >= b.val ? a : b) : (a.val <= b.val ? a : b)
+    );
+    const diff = worst.val > 0
+      ? Math.abs((best.val - worst.val) / worst.val * 100).toFixed(1)
+      : '0';
+    const cls = best.label.includes('80B') ? 'delta-pos' : '#7dd3fc';
+    return `<span style="color:${cls}">● ${dim.name}:</span> ` +
+           `<strong>${esc(best.label)}</strong> wins by ${diff}%`;
+  });
+
+  el.innerHTML = `
+    <div style="background:#12121a;border-radius:6px;padding:.8rem 1rem;font-size:.82rem;line-height:2">
+      ${lines.join('<br>')}
+    </div>`;
+}
+
+function renderSummary(benchRuns) {
+  const banner = document.getElementById('summary-banner');
+  if (!benchRuns.length) { banner.style.display = 'none'; return; }
+
+  const sortedIds = [...new Set(benchRuns.map(r => r.run_id))].sort().reverse();
+  const latest = benchRuns.filter(r => r.run_id === sortedIds[0]);
+  const a = latest.find(r => r.label && r.label.startsWith('A'));
+  const b = latest.find(r => r.label && r.label.startsWith('B'));
+  if (!a || !b) { banner.style.display = 'none'; return; }
+
+  const model = a.model || b.model || 'local model';
+  const shortModel = model.split('/').pop();
+
+  const metrics = [
+    { key: 'qwen_in',    name: 'local model input tokens',  lowerIsBetter: true },
+    { key: 'qwen_out',   name: 'local model output tokens', lowerIsBetter: true },
+    { key: 'tool_bytes', name: 'tool response bytes',       lowerIsBetter: true },
+  ].filter(m => a[m.key] != null && b[m.key] != null && a[m.key] > 0);
+
+  if (!metrics.length) { banner.style.display = 'none'; return; }
+
+  const primary = metrics[0];
+  const aVal = a[primary.key], bVal = b[primary.key];
+  const pct = ((bVal - aVal) / aVal * 100);
+  const absPct = Math.abs(pct).toFixed(1);
+  const rtkHelps = primary.lowerIsBetter ? pct < 0 : pct > 0;
+  const direction = pct < 0 ? 'reduced' : 'increased';
+
+  let verdict, cls;
+  if (Math.abs(pct) < 1) {
+    verdict = `RTK had no meaningful effect on ${shortModel} — token counts are within 1%.`;
+    cls = 'neu';
+  } else if (rtkHelps) {
+    verdict = `✓ RTK ${direction} ${primary.name} by ${absPct}% with ${shortModel} — filtering is working.`;
+    cls = 'good';
+  } else {
+    verdict = `✗ RTK ${direction} ${primary.name} by ${absPct}% with ${shortModel} — RTK is hurting performance on this model.`;
+    cls = 'bad';
+  }
+
+  const details = metrics.slice(1).map(m => {
+    const av = a[m.key], bv = b[m.key];
+    const p = ((bv - av) / av * 100);
+    const sign = p > 0 ? '+' : '';
+    return `${m.name}: ${sign}${p.toFixed(1)}%`;
+  });
+
+  const taskSnip = (a.task || '').slice(0, 80);
+  const detailParts = [];
+  if (details.length) detailParts.push(details.join(' · '));
+  if (taskSnip) detailParts.push(`Task: "${taskSnip}"`);
+  detailParts.push(`Run: ${sortedIds[0]}`);
+
+  banner.className = cls;
+  banner.style.display = '';
+  banner.innerHTML = `<div class="summary-verdict">${verdict}</div>` +
+    (detailParts.length ? `<div class="summary-detail">${detailParts.join('<br>')}</div>` : '');
+}
+
 async function load() {
   const res = await fetch('/data');
   const rows = await res.json();
@@ -209,6 +402,8 @@ function render(rows) {
     { val: chat.filter(r => !r.error).length,  lbl: 'Chat samples' },
   ].map(c => `<div class="card"><div class="val">${c.val}</div><div class="lbl">${c.lbl}</div></div>`).join('');
 
+  renderModelComparison(benchRuns);
+  renderSummary(benchRuns);
   renderRtk(pipeline);
   renderBenchRuns(benchRuns);
   renderChat(chat);
