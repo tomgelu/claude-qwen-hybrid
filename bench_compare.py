@@ -9,6 +9,7 @@ the DB by a shared compare_id for cross-model display in bench_viewer.
 Usage:
     python3 bench_compare.py
     python3 bench_compare.py "your task here"
+    python3 bench_compare.py "your task here" --runs 3
 """
 
 import argparse
@@ -20,7 +21,8 @@ from datetime import datetime
 from pathlib import Path
 
 HERE = Path(__file__).parent
-HEALTH_URL = "http://localhost:8000/health"
+BASE_URL   = "http://127.0.0.1:8000"
+HEALTH_URL = f"{BASE_URL}/health"
 
 # Model configs — order determines run sequence (35B first, cheaper/faster warmup)
 MODEL_CONFIGS = [
@@ -129,13 +131,14 @@ def wait_for_health(timeout: int, tag: str) -> None:
     raise TimeoutError(f"{tag} server did not become healthy within {timeout}s")
 
 
-def run_bench(task: str, tag: str, compare_id: str) -> None:
+def run_bench(task: str, tag: str, compare_id: str, runs: int = 1) -> None:
     """Invoke bench.py as a subprocess with model tag and compare_id."""
-    print(f"\n  [compare] Running bench for {tag}...", flush=True)
+    print(f"\n  [compare] Running bench for {tag} (runs={runs})...", flush=True)
     subprocess.run(
         [
             sys.executable, str(HERE / "bench.py"),
             task, "--tag", tag, "--compare-id", compare_id,
+            "--runs", str(runs),
         ],
         check=True,
     )
@@ -146,6 +149,8 @@ def main() -> None:
         description="Cross-model benchmark: 35B vs 80B, each with/without RTK"
     )
     parser.add_argument("task", nargs="?", default=None, help="Task description")
+    parser.add_argument("--runs", type=int, default=1,
+                        help="Number of A/B pairs to average per model (passed to bench.py)")
     args = parser.parse_args()
 
     sys.path.insert(0, str(HERE))
@@ -177,8 +182,8 @@ def main() -> None:
         try:
             wait_for_health(cfg["health_timeout"], tag)
             os.environ["LOCAL_MODEL_NAME"] = cfg["local_model_name"]
-            os.environ["LOCAL_MODEL_URL"]  = "http://127.0.0.1:8000/v1/chat/completions"
-            run_bench(task, tag, compare_id)
+            os.environ["LOCAL_MODEL_URL"]  = f"{BASE_URL}/v1/chat/completions"
+            run_bench(task, tag, compare_id, runs=args.runs)
         except Exception as exc:
             print(f"\n  [compare] ERROR during {tag} run: {exc}", flush=True)
             print(f"  [compare] Partial results may exist under compare_id={compare_id}", flush=True)

@@ -138,7 +138,7 @@ HTML = r"""<!DOCTYPE html>
       <table>
         <thead><tr>
           <th style="width:2rem"><input type="checkbox" id="check-all" onchange="toggleAllChecks(this)" title="Select all"></th>
-          <th>Run ID</th><th>Task</th><th>A tests</th><th>B tests</th><th>C tests</th><th>RTK saving</th>
+          <th>Run ID</th><th>Model</th><th>Task</th><th>A tests</th><th>B tests</th><th>C tests</th><th>RTK saving</th>
         </tr></thead>
         <tbody id="bench-history"></tbody>
       </table>
@@ -634,6 +634,7 @@ function renderBenchRuns(rows) {
     tr.innerHTML = `
       <td style="text-align:center"><input type="checkbox" class="run-check" data-run-id="${esc(rid)}" onchange="onRunCheckChange()"></td>
       <td class="run-label">${rid}</td>
+      <td style="font-size:.75rem;color:#a78bfa;font-family:monospace">${esc(ra.model_label || rb.model_label || '')}</td>
       <td style="font-size:.75rem;color:#9ca3af">${taskSnip}</td>
       <td>${testCell(ra)}</td>
       <td>${testCell(rb)}</td>

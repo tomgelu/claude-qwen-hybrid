@@ -109,6 +109,13 @@ python3 bench.py                        # default fibonacci task
 python3 bench.py "your custom task"     # custom task
 ```
 
+**Cross-model benchmark (35B vs 80B, sequential with Docker swap):**
+```bash
+python3 ~/claude-autonaumous/bench_compare.py "your task"
+python3 ~/claude-autonaumous/bench_compare.py "your task" --runs 3
+```
+Results appear in bench_viewer → "Model Comparison" section.
+
 Runs the full Claude→Qwen pipeline twice in isolated temp workspaces (Run A: no RTK, Run B: RTK on), then prints a side-by-side token comparison.
 
 **What the metrics mean:**
