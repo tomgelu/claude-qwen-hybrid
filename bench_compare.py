@@ -172,14 +172,14 @@ def main() -> None:
 
         stop_servers()
 
-        if cfg["start_mode"] == "compose":
-            start_35b(cfg)
-        elif cfg["start_mode"] == "docker_run":
-            start_80b(cfg)
-        else:
-            raise ValueError(f"Unknown start_mode: {cfg['start_mode']!r}")
-
         try:
+            if cfg["start_mode"] == "compose":
+                start_35b(cfg)
+            elif cfg["start_mode"] == "docker_run":
+                start_80b(cfg)
+            else:
+                raise ValueError(f"Unknown start_mode: {cfg['start_mode']!r}")
+
             wait_for_health(cfg["health_timeout"], tag)
             os.environ["LOCAL_MODEL_NAME"] = cfg["local_model_name"]
             os.environ["LOCAL_MODEL_URL"]  = f"{BASE_URL}/v1/chat/completions"
