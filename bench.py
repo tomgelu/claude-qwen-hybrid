@@ -104,6 +104,8 @@ CREATE TABLE IF NOT EXISTS bench_runs (
     tests_passed    INTEGER NOT NULL DEFAULT 0,
     tests_failed    INTEGER NOT NULL DEFAULT 0,
     wall_time_s     INTEGER NOT NULL DEFAULT 0,
+    model_label     TEXT    NOT NULL DEFAULT '',
+    compare_id      TEXT    NOT NULL DEFAULT '',
     created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
 )
 """
@@ -113,12 +115,14 @@ INSERT INTO bench_runs
     (run_id, task, label, use_rtk, phases_enabled,
      qwen_in, qwen_out, tool_bytes, claude_in, claude_out,
      steps_completed, steps_failed, steps_total,
-     tests_passed, tests_failed, wall_time_s)
+     tests_passed, tests_failed, wall_time_s,
+     model_label, compare_id)
 VALUES
     (:run_id, :task, :label, :use_rtk, :phases_enabled,
      :qwen_in, :qwen_out, :tool_bytes, :claude_in, :claude_out,
      :steps_completed, :steps_failed, :steps_total,
-     :tests_passed, :tests_failed, :wall_time_s)
+     :tests_passed, :tests_failed, :wall_time_s,
+     :model_label, :compare_id)
 """
 
 
@@ -140,6 +144,16 @@ def _write_bench_results(
     try:
         conn = sqlite3.connect(str(db_path))
         conn.execute(_CREATE_TABLE)
+
+        # Migrate existing DBs that predate model_label/compare_id columns
+        for col, defn in [
+            ("model_label", "TEXT NOT NULL DEFAULT ''"),
+            ("compare_id",  "TEXT NOT NULL DEFAULT ''"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE bench_runs ADD COLUMN {col} {defn}")
+            except sqlite3.OperationalError:
+                pass  # column already exists
 
         # One-time JSONL migration (only runs when using the real DB, not test overrides)
         if out_path is None and _JSONL_FILE.exists():
@@ -163,6 +177,8 @@ def _write_bench_results(
                 "tests_passed":    stats.get("tests_passed", 0),
                 "tests_failed":    stats.get("tests_failed", 0),
                 "wall_time_s":     stats.get("wall_time_s", 0),
+                "model_label":     stats.get("model_label", ""),
+                "compare_id":      stats.get("compare_id", ""),
             })
         conn.commit()
     finally:
@@ -393,6 +409,10 @@ def main():
                         help="Number of A/B(/C) sets to run and average (default: 1)")
     parser.add_argument("--phases", action="store_true",
                         help="Add a third run with ENABLE_PHASES=true to compare quality impact")
+    parser.add_argument("--tag",        default="",
+                        help="Model label stored in DB (e.g. 35b, 80b)")
+    parser.add_argument("--compare-id", default="", dest="compare_id",
+                        help="Links this run to a cross-model comparison set")
     args = parser.parse_args()
 
     task = args.task or DEFAULT_TASK
@@ -452,11 +472,14 @@ def main():
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     avg_sfx_label = f" avg×{args.runs}" if args.runs > 1 else ""
     persist_stats = [
-        {**avg_a, "label": f"A (no RTK){avg_sfx_label}"},
-        {**avg_b, "label": f"B (RTK){avg_sfx_label}"},
+        {**avg_a, "label": f"A (no RTK){avg_sfx_label}",
+         "model_label": args.tag, "compare_id": args.compare_id},
+        {**avg_b, "label": f"B (RTK){avg_sfx_label}",
+         "model_label": args.tag, "compare_id": args.compare_id},
     ]
     if all_c:
-        persist_stats.append({**avg_c, "label": f"C (RTK+phases){avg_sfx_label}"})
+        persist_stats.append({**avg_c, "label": f"C (RTK+phases){avg_sfx_label}",
+                               "model_label": args.tag, "compare_id": args.compare_id})
     _write_bench_results(run_id, task, persist_stats)
     print(f"\n  Results saved → benchmark_results.db  (run_id={run_id})")
 
