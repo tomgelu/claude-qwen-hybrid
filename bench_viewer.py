@@ -222,10 +222,8 @@ function renderModelComparison(benchRuns) {
   // Build selector if multiple comparisons exist
   const sel = document.getElementById('model-cmp-selector');
   if (cmpIds.length > 1) {
-    sel.innerHTML = 'Comparison: ' + cmpIds.map((id, i) =>
-      `<span style="cursor:pointer;color:${i===0?'#a78bfa':'#6b7280'};margin-right:.5rem"
-        onclick="showComparison('${esc(id)}')">${esc(id)}</span>`
-    ).join('');
+    sel.innerHTML = 'Showing most recent: <span style="font-family:monospace;color:#a78bfa">' + esc(cmpIds[0]) + '</span>'
+      + ' <span style="color:#4b5563">(' + (cmpIds.length - 1) + ' older hidden)</span>';
   } else {
     sel.innerHTML = `<span style="font-family:monospace">${esc(cmpIds[0])}</span>`;
   }
@@ -306,10 +304,13 @@ function renderModelVerdict(cols, el) {
     const worst = vals.reduce((a, b) =>
       dim.lowerBetter ? (a.val >= b.val ? a : b) : (a.val <= b.val ? a : b)
     );
+    if (worst.val === 0 && best.val === 0) {
+      return `<span style="color:#4b5563">● ${dim.name}:</span> no data`;
+    }
     const diff = worst.val > 0
       ? Math.abs((best.val - worst.val) / worst.val * 100).toFixed(1)
       : '0';
-    const cls = best.label.includes('80B') ? 'delta-pos' : '#7dd3fc';
+    const cls = best.label.includes('80B') ? '#86efac' : '#7dd3fc';
     return `<span style="color:${cls}">● ${dim.name}:</span> ` +
            `<strong>${esc(best.label)}</strong> wins by ${diff}%`;
   });
